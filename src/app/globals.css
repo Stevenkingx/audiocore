@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 0, 0, 0;
+  --background-end-rgb: 0, 0, 0;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: #050505;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Swagger UI Dark Theme Fix */
+.swagger-ui {
+  filter: invert(88%) hue-rotate(180deg) brightness(1.1);
+}
+
+.swagger-ui .opblock, 
+.swagger-ui .opblock-section-header, 
+.swagger-ui .responses-inner, 
+.swagger-ui .model-box,
+.swagger-ui section.models {
+  background: rgba(0, 0, 0, 0.05) !important;
+  border-radius: 12px !important;
+}
+
+/* Fix text contrast after inversion */
+.swagger-ui .info .title, 
+.swagger-ui .opblock .opblock-summary-path,
+.swagger-ui .opblock .opblock-summary-operation-id {
+  font-weight: 900 !important;
+}
+
+.swagger-ui .btn.execute {
+  filter: invert(1) hue-rotate(-180deg); /* Re-invert button to original branding colors */
+  background-color: #4f46e5 !important;
+  color: white !important;
+  border: none !important;
+}
+
+.swagger-ui .topbar {
+  display: none;
+}

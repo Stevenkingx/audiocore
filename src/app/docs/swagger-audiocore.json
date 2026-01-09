@@ -1,0 +1,265 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Audio Core API",
+    "description": "Advanced audio generation system. Powered by Suno AI and ChatGPT.",
+    "version": "1.2.0"
+  },
+  "tags": [
+    { "name": "Generation" },
+    { "name": "AI Enhancement" },
+    { "name": "Management" }
+  ],
+  "paths": {
+    "/api/generate": {
+      "post": {
+        "summary": "Generate audio based on Prompt.",
+        "description": "Automatically generates lyrics and music. Consumes 10 credits for 2 variations.",
+        "tags": [
+          "Generation"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "description": "Describe the song you want to create.",
+                    "oneOf": [
+                      { "example": "A nostalgic 80s synthwave track about a sunset drive in Miami." },
+                      { "example": "An upbeat K-Pop song with energetic beats and catchy hooks." },
+                      { "example": "A melancholic cello and piano duet for a rainy afternoon." },
+                      { "example": "Hard-hitting trap beat with aggressive bass and dark atmosphere." },
+                      { "example": "Lo-fi hip hop with jazz samples for studying." },
+                      { "example": "Epic cinematic orchestral theme for a space adventure." },
+                      { "example": "Fast-paced power metal song about dragons and fire." },
+                      { "example": "Relaxing acoustic folk song about mountain hiking." },
+                      { "example": "Deep house track with ethereal vocals for a summer club." },
+                      { "example": "Alternative rock anthem with distorted guitars and powerful drums." }
+                    ]
+                  },
+                  "make_instrumental": {
+                    "type": "boolean",
+                    "description": "Whether to generate instrumental music.",
+                    "default": false,
+                    "example": false
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Model version.",
+                    "default": "chirp-crow",
+                    "example": "chirp-crow"
+                  },
+                  "wait_audio": {
+                    "type": "boolean",
+                    "description": "If true, waits up to 100s for completion.",
+                    "default": false,
+                    "example": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/audio_info"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ai_lyrics": {
+      "post": {
+        "summary": "Generate AI Lyrics (ChatGPT)",
+        "description": "Uses GPT-4o-mini to generate structured lyrics, a title, and style tags based on a simple theme.",
+        "tags": [
+          "AI Enhancement"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "description": "The theme for the lyrics.",
+                    "example": "A lost traveler in a futuristic city"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "title": { "type": "string" },
+                    "lyrics": { "type": "string" },
+                    "style": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "OpenAI Compatible Completion",
+        "tags": [
+          "Generation"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "example": "Lofi hip hop track for studying"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success"
+          }
+        }
+      }
+    },
+    "/api/custom_generate": {
+      "post": {
+        "summary": "Custom Generation",
+        "tags": [
+          "Generation"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt",
+                  "tags",
+                  "title"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "description": "Lyrics.",
+                    "example": "[Verse 1]\nNeon lights in the rain..."
+                  },
+                  "tags": {
+                    "type": "string",
+                    "example": "synthwave neon nocturnal"
+                  },
+                  "title": {
+                    "type": "string",
+                    "example": "Midnight City"
+                  },
+                  "model": {
+                    "type": "string",
+                    "default": "chirp-crow",
+                    "example": "chirp-crow"
+                  },
+                  "wait_audio": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success"
+          }
+        }
+      }
+    },
+    "/api/get": {
+      "get": {
+        "summary": "Retrieve Audio Info",
+        "tags": [
+          "Management"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ids",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": { "type": "number" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success"
+          }
+        }
+      }
+    },
+    "/api/get_limit": {
+      "get": {
+        "summary": "Check Credits",
+        "tags": [
+          "Management"
+        ],
+        "responses": {
+          "200": {
+            "description": "success"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "audio_info": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "audio_url": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      }
+    }
+  }
+}
