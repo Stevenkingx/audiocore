@@ -6,6 +6,8 @@ interface LyricsResult {
   title: string;
   lyrics: string;
   style: string;
+  song_type?: 'Solo' | 'Duet';
+  music_prompt?: string;
 }
 
 interface AudioInfo {
@@ -111,12 +113,15 @@ export default function MusicCreator() {
     setLoading('music');
     setError(null);
     try {
+      // Use music_prompt if available (more detailed), fallback to style
+      const tags = lyrics.music_prompt || lyrics.style;
+
       const res = await fetch('/api/custom_generate', {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
           prompt: String(lyrics.lyrics),
-          tags: String(lyrics.style),
+          tags: String(tags),
           title: String(lyrics.title),
           wait_audio: true,
         }),
@@ -252,9 +257,21 @@ export default function MusicCreator() {
 
           {lyrics && (
             <div className="space-y-6">
-              {/* Title and tags */}
+              {/* Title and type */}
               <div className="space-y-3">
-                <h3 className="text-2xl font-bold text-white">{lyrics.title}</h3>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-2xl font-bold text-white">{lyrics.title}</h3>
+                  {lyrics.song_type && (
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      lyrics.song_type === 'Duet'
+                        ? 'bg-purple-500/20 border border-purple-500/30 text-purple-400'
+                        : 'bg-white/10 border border-white/20 text-white/60'
+                    }`}>
+                      {lyrics.song_type}
+                    </span>
+                  )}
+                </div>
+                {/* Style tags */}
                 <div className="flex flex-wrap gap-2">
                   {String(lyrics.style || '').split(',').filter(t => t.trim()).map((tag, i) => (
                     <span key={i} className="text-xs px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
@@ -262,6 +279,12 @@ export default function MusicCreator() {
                     </span>
                   ))}
                 </div>
+                {/* Music prompt preview */}
+                {lyrics.music_prompt && (
+                  <p className="text-xs text-white/30 line-clamp-2">
+                    {lyrics.music_prompt}
+                  </p>
+                )}
               </div>
 
               {/* Lyrics */}

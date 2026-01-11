@@ -87,7 +87,7 @@
     "/api/ai_lyrics": {
       "post": {
         "summary": "Generate AI Lyrics (ChatGPT)",
-        "description": "Uses GPT-4o-mini to generate structured lyrics, a title, and style tags based on a simple theme.",
+        "description": "Generate complete song lyrics optimized for Suno AI using GPT-4o-mini. Returns structured lyrics with section tags, a detailed music prompt (600-800 chars), and supports both solo and duet songs.",
         "tags": [
           "AI Enhancement"
         ],
@@ -96,14 +96,34 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "prompt"
-                ],
+                "required": ["prompt"],
                 "properties": {
                   "prompt": {
                     "type": "string",
-                    "description": "The theme for the lyrics.",
-                    "example": "A lost traveler in a futuristic city"
+                    "description": "Theme or concept for the song",
+                    "example": "A lost traveler finding hope in a futuristic city"
+                  },
+                  "genre": {
+                    "type": "string",
+                    "description": "Musical genre (e.g., 'acoustic pop', 'indie rock', 'electronic')",
+                    "example": "indie folk"
+                  },
+                  "mood": {
+                    "type": "string",
+                    "description": "Mood/vibe for the song",
+                    "example": "warm, hopeful, nostalgic"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": ["solo", "duet"],
+                    "description": "Solo or duet song. Duets include (male)/(female)/(both) voice tags.",
+                    "default": "solo"
+                  },
+                  "avoid": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Words to avoid in lyrics (default: neon, ashes, echoes, shadows)",
+                    "example": ["rain", "fire"]
                   }
                 }
               }
@@ -112,15 +132,33 @@
         },
         "responses": {
           "200": {
-            "description": "success",
+            "description": "Generated song data",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "title": { "type": "string" },
-                    "lyrics": { "type": "string" },
-                    "style": { "type": "string" }
+                    "title": {
+                      "type": "string",
+                      "description": "Song title (2-4 words)"
+                    },
+                    "song_type": {
+                      "type": "string",
+                      "enum": ["Solo", "Duet"],
+                      "description": "Whether this is a solo or duet"
+                    },
+                    "music_prompt": {
+                      "type": "string",
+                      "description": "Detailed music style prompt (600-800 chars) including genre, instruments, tempo, mood, production notes"
+                    },
+                    "lyrics": {
+                      "type": "string",
+                      "description": "Full lyrics with section tags ([Verse 1], [Chorus], etc.)"
+                    },
+                    "style": {
+                      "type": "string",
+                      "description": "Extracted style keywords (for backwards compatibility)"
+                    }
                   }
                 }
               }
