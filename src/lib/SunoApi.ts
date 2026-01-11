@@ -13,9 +13,11 @@ import { promises as fs } from 'fs';
 import path from 'node:path';
 
 // sunoApi instance caching
-const globalForSunoApi = global as unknown as { 
+const globalForSunoApi = global as unknown as {
   sunoApiCache?: Map<string, SunoApi>,
-  currentCookieIndex?: number 
+  currentCookieIndex?: number,
+  personaAccountMap?: Map<string, number>,
+  cookieCount?: number
 };
 const cache = globalForSunoApi.sunoApiCache || new Map<string, SunoApi>();
 globalForSunoApi.sunoApiCache = cache;
@@ -23,6 +25,43 @@ globalForSunoApi.sunoApiCache = cache;
 // Track the current cookie index for rotation
 if (globalForSunoApi.currentCookieIndex === undefined) {
   globalForSunoApi.currentCookieIndex = 0;
+}
+
+// Map persona_id -> account index for automatic routing
+if (!globalForSunoApi.personaAccountMap) {
+  globalForSunoApi.personaAccountMap = new Map<string, number>();
+}
+const personaAccountMap = globalForSunoApi.personaAccountMap;
+
+/**
+ * Register a persona to a specific account index
+ */
+export function registerPersonaAccount(personaId: string, accountIndex: number): void {
+  personaAccountMap.set(personaId, accountIndex);
+  logger.info(`Registered persona ${personaId} to account #${accountIndex + 1}`);
+}
+
+/**
+ * Get the account index for a persona, or undefined if not registered
+ */
+export function getPersonaAccount(personaId: string): number | undefined {
+  return personaAccountMap.get(personaId);
+}
+
+/**
+ * Get all registered persona mappings
+ */
+export function getAllPersonaMappings(): Record<string, number> {
+  return Object.fromEntries(personaAccountMap);
+}
+
+/**
+ * Get the number of configured cookie accounts
+ */
+export function getCookieCount(): number {
+  const cookieEnv = process.env.SUNO_COOKIE || '';
+  if (!cookieEnv.includes('|||')) return 1;
+  return cookieEnv.split('|||').filter(c => c.trim().length > 0).length;
 }
 
 const logger = pino();
@@ -279,6 +318,8 @@ export interface PersonaInfo {
   is_owned: boolean;
   clip_count: number;
   upvote_count?: number;
+  /** Account index this persona belongs to (for multi-cookie setups) */
+  account_index?: number;
 }
 
 /**
@@ -478,6 +519,9 @@ class SunoApi {
   private solver = new Solver(`${process.env.TWOCAPTCHA_KEY}`);
   private ghostCursorEnabled = yn(process.env.BROWSER_GHOST_CURSOR, { default: false });
   private cursor?: Cursor;
+
+  /** The account index this instance is using (for multi-cookie setups) */
+  public accountIndex?: number;
 
   constructor(cookies: string) {
     // Validate required environment variables at startup
@@ -2084,20 +2128,28 @@ class SunoApi {
       throw new Error(`Error response: ${response.statusText}`);
     }
 
-    const personas = response.data.personas.map((p): PersonaInfo => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      image_url: p.clip?.image_url || p.user_image_url,
-      root_clip_id: p.root_clip_id,
-      vox_audio_id: (p as any).vox_audio_id,
-      user_display_name: p.user_display_name,
-      user_handle: p.user_handle,
-      is_public: p.is_public,
-      is_owned: p.is_owned,
-      clip_count: p.clip_count,
-      upvote_count: p.upvote_count
-    }));
+    const personas = response.data.personas.map((p): PersonaInfo => {
+      // Register each persona to this account for automatic routing
+      if (this.accountIndex !== undefined && p.id && p.is_owned) {
+        registerPersonaAccount(p.id, this.accountIndex);
+      }
+
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        image_url: p.clip?.image_url || p.user_image_url,
+        root_clip_id: p.root_clip_id,
+        vox_audio_id: (p as any).vox_audio_id,
+        user_display_name: p.user_display_name,
+        user_handle: p.user_handle,
+        is_public: p.is_public,
+        is_owned: p.is_owned,
+        clip_count: p.clip_count,
+        upvote_count: p.upvote_count,
+        account_index: p.is_owned ? this.accountIndex : undefined
+      };
+    });
 
     return {
       personas,
@@ -2233,6 +2285,12 @@ class SunoApi {
     }
 
     const p = response.data.persona || response.data;
+
+    // Register this persona to the current account for automatic routing
+    if (this.accountIndex !== undefined && p.id) {
+      registerPersonaAccount(p.id, this.accountIndex);
+    }
+
     return {
       id: p.id,
       name: p.name,
@@ -2245,7 +2303,8 @@ class SunoApi {
       is_public: p.is_public,
       is_owned: true,
       clip_count: p.clip_count || 0,
-      upvote_count: p.upvote_count || 0
+      upvote_count: p.upvote_count || 0,
+      account_index: this.accountIndex
     };
   }
 
@@ -2483,36 +2542,112 @@ class SunoApi {
  *
  * // Subsequent calls with same cookie return cached instance
  * const sameApi = await sunoApi(); // Returns cached instance
+ *
+ * // Use specific account index (bypasses rotation)
+ * const api3 = await sunoApi(undefined, 0); // Always use first account
  * ```
  */
-export const sunoApi = async (cookie?: string) => {
+export const sunoApi = async (cookie?: string, accountIndex?: number) => {
   let resolvedCookie = cookie && cookie.includes('__client') ? cookie : process.env.SUNO_COOKIE;
-  
+  let usedAccountIndex: number | undefined;
+
   if (!resolvedCookie) {
     logger.info('No cookie provided! Aborting...\nPlease provide a cookie either in the .env file or in the Cookie header of your request.')
     throw new Error('Please provide a cookie either in the .env file or in the Cookie header of your request.');
   }
 
-  // Handle multi-cookie rotation if the cookie comes from environment variables
+  // Handle multi-cookie selection
   if (!cookie && resolvedCookie.includes('|||')) {
     const cookies = resolvedCookie.split('|||').map(c => c.trim()).filter(c => c.length > 0);
     if (cookies.length > 0) {
-      const index = globalForSunoApi.currentCookieIndex! % cookies.length;
-      resolvedCookie = cookies[index];
-      logger.info(`Using account #${index + 1} of ${cookies.length} for rotation`);
-      globalForSunoApi.currentCookieIndex!++;
+      // If accountIndex is specified, use that specific account
+      if (accountIndex !== undefined) {
+        if (accountIndex < 0 || accountIndex >= cookies.length) {
+          throw new Error(`Invalid account index ${accountIndex}. Must be between 0 and ${cookies.length - 1}`);
+        }
+        usedAccountIndex = accountIndex;
+        resolvedCookie = cookies[accountIndex];
+        logger.info(`Using specified account #${accountIndex + 1} of ${cookies.length}`);
+      } else {
+        // Default rotation behavior
+        usedAccountIndex = globalForSunoApi.currentCookieIndex! % cookies.length;
+        resolvedCookie = cookies[usedAccountIndex];
+        logger.info(`Using account #${usedAccountIndex + 1} of ${cookies.length} for rotation`);
+        globalForSunoApi.currentCookieIndex!++;
+      }
     }
   }
 
   // Check if the instance for this cookie already exists in the cache
   const cachedInstance = cache.get(resolvedCookie);
-  if (cachedInstance)
+  if (cachedInstance) {
+    cachedInstance.accountIndex = usedAccountIndex;
     return cachedInstance;
+  }
 
   // If not, create a new instance and initialize it
   const instance = await new SunoApi(resolvedCookie).init();
+  instance.accountIndex = usedAccountIndex;
   // Cache the initialized instance
   cache.set(resolvedCookie, instance);
 
   return instance;
+};
+
+/**
+ * Scan all configured accounts for personas and register them for automatic routing.
+ * Call this at startup or when you need to refresh the persona mappings.
+ *
+ * @returns Promise resolving to object with total personas found and account breakdown
+ *
+ * @example
+ * ```typescript
+ * const result = await scanAllAccountsForPersonas();
+ * console.log(`Found ${result.total} personas across ${result.accounts} accounts`);
+ * ```
+ */
+export const scanAllAccountsForPersonas = async (): Promise<{
+  total: number;
+  accounts: number;
+  byAccount: { accountIndex: number; count: number; personas: string[] }[];
+}> => {
+  const cookieCount = getCookieCount();
+  const result: {
+    total: number;
+    accounts: number;
+    byAccount: { accountIndex: number; count: number; personas: string[] }[];
+  } = {
+    total: 0,
+    accounts: cookieCount,
+    byAccount: []
+  };
+
+  logger.info(`Scanning ${cookieCount} account(s) for personas...`);
+
+  for (let i = 0; i < cookieCount; i++) {
+    try {
+      const api = await sunoApi(undefined, i);
+      const { personas } = await api.getPersonas();
+      const ownedPersonas = personas.filter(p => p.is_owned);
+
+      result.byAccount.push({
+        accountIndex: i,
+        count: ownedPersonas.length,
+        personas: ownedPersonas.map(p => p.id)
+      });
+      result.total += ownedPersonas.length;
+
+      logger.info(`Account #${i + 1}: Found ${ownedPersonas.length} persona(s)`);
+    } catch (error) {
+      logger.error(`Failed to scan account #${i + 1}: ${toError(error).message}`);
+      result.byAccount.push({
+        accountIndex: i,
+        count: 0,
+        personas: []
+      });
+    }
+  }
+
+  logger.info(`Scan complete. Total: ${result.total} personas across ${cookieCount} accounts`);
+  return result;
 };

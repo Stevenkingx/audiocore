@@ -201,7 +201,7 @@
     "/api/custom_generate": {
       "post": {
         "summary": "Custom Generation",
-        "description": "Generate music with custom lyrics, style tags, and title. Optionally use a persona (voice profile) for vocal consistency.",
+        "description": "Generate music with custom lyrics, style tags, and title. Optionally use a persona (voice profile) for vocal consistency. When persona_id is provided, the request is automatically routed to the correct account that owns the persona (multi-cookie support).",
         "tags": [
           "Generation"
         ],
@@ -550,10 +550,70 @@
         }
       }
     },
+    "/api/personas/scan": {
+      "get": {
+        "summary": "Scan All Accounts for Personas",
+        "description": "Scan all configured cookie accounts for personas and register them for automatic routing. This populates the persona -> account mapping cache. Call this at startup or when personas were created externally. When using custom_generate with a persona_id, the system will automatically route the request to the correct account.",
+        "tags": [
+          "Persona"
+        ],
+        "responses": {
+          "200": {
+            "description": "Scan completed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "number",
+                      "description": "Total number of personas found across all accounts"
+                    },
+                    "accounts": {
+                      "type": "number",
+                      "description": "Number of configured cookie accounts"
+                    },
+                    "byAccount": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "accountIndex": {
+                            "type": "number",
+                            "description": "Account index (0-based)"
+                          },
+                          "count": {
+                            "type": "number",
+                            "description": "Number of personas in this account"
+                          },
+                          "personas": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "List of persona IDs"
+                          }
+                        }
+                      }
+                    },
+                    "mappings": {
+                      "type": "object",
+                      "description": "Map of persona_id -> account_index for automatic routing",
+                      "additionalProperties": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/api/personas": {
       "get": {
         "summary": "List User Personas",
-        "description": "Get list of user's personas (voice profiles). Personas can be used to maintain vocal consistency across generated songs.",
+        "description": "Get list of user's personas (voice profiles). Personas can be used to maintain vocal consistency across generated songs. When called, automatically registers found personas for automatic account routing.",
         "tags": [
           "Persona"
         ],
@@ -900,6 +960,10 @@
           "upvote_count": {
             "type": "number",
             "description": "Number of upvotes for this persona"
+          },
+          "account_index": {
+            "type": "number",
+            "description": "Account index this persona belongs to (for multi-cookie setups). Used for automatic routing."
           }
         }
       }

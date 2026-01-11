@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { cookies } from 'next/headers';
-import { DEFAULT_MODEL, sunoApi } from "@/lib/SunoApi";
+import { DEFAULT_MODEL, sunoApi, getPersonaAccount } from "@/lib/SunoApi";
 import { corsHeaders } from "@/lib/utils";
 import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
 
@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) {
-    return new NextResponse(unauthorizedResponse.body, { 
-      status: unauthorizedResponse.status, 
-      headers: unauthorizedResponse.headers 
+    return new NextResponse(unauthorizedResponse.body, {
+      status: unauthorizedResponse.status,
+      headers: unauthorizedResponse.headers
     });
   }
 
@@ -21,7 +21,17 @@ export async function POST(req: NextRequest) {
       const { prompt, tags, title, make_instrumental, model, wait_audio, negative_tags, persona_id, artist_clip_id, root_clip_id } = body;
       // Accept either artist_clip_id or root_clip_id (root_clip_id is returned by /api/personas)
       const clipId = artist_clip_id || root_clip_id;
-      const audioInfo = await (await sunoApi((await cookies()).toString())).custom_generate(
+
+      // If persona_id is provided, route to the correct account automatically
+      let accountIndex: number | undefined;
+      if (persona_id) {
+        accountIndex = getPersonaAccount(persona_id);
+        if (accountIndex !== undefined) {
+          console.log(`Routing to account #${accountIndex + 1} for persona ${persona_id}`);
+        }
+      }
+
+      const audioInfo = await (await sunoApi((await cookies()).toString(), accountIndex)).custom_generate(
         prompt, tags, title,
         Boolean(make_instrumental),
         model || DEFAULT_MODEL,
