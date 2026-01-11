@@ -62,6 +62,9 @@ pnpm exec playwright-core install chromium
 pnpm run dev
 ```
 
+### 4. Deploy to Vercel
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FStevenkingx%2Faudiocore&env=SUNO_COOKIE,TWOCAPTCHA_KEY,OPENAI_API_KEY,API_KEY&envDescription=Required%20environment%20variables%20for%20Audio%20Core&project-name=audiocore&repository-name=audiocore)
+
 ## API Reference
 
 ### Generation
