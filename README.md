@@ -43,11 +43,24 @@ Audio Core is a professional-grade interface and API for Suno AI. It features a 
 
 ### 2. Configure Environment
 Create a `.env` file based on `.env.example`:
-- `SUNO_COOKIE`: Your cookie(s). Separate multiple accounts with `|||`.
 - `TWOCAPTCHA_KEY`: Required for automated generation.
 - `OPENAI_API_KEY`: Required for the AI Composition Studio.
 - `APP_ENV`: Set to `production` to enable security.
 - `API_KEY`: Your secret master key.
+
+**Cookie Configuration (choose one format):**
+
+Option A - Numbered (recommended for multiple accounts):
+```env
+SUNO_COOKIE_1=__client=abc123...
+SUNO_COOKIE_2=__client=def456...
+SUNO_COOKIE_3=__client=ghi789...
+```
+
+Option B - Legacy format:
+```env
+SUNO_COOKIE=cookie1|||cookie2|||cookie3
+```
 
 Optional retry configuration:
 - `BROWSER_RETRIES`: Number of retry attempts for browser errors (default: 3).

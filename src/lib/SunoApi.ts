@@ -55,16 +55,53 @@ export function getAllPersonaMappings(): Record<string, number> {
   return Object.fromEntries(personaAccountMap);
 }
 
+const logger = pino();
+
+/**
+ * Get all configured cookies from environment variables.
+ * Supports two formats:
+ * 1. Numbered: SUNO_COOKIE_1, SUNO_COOKIE_2, SUNO_COOKIE_3, etc.
+ * 2. Legacy: SUNO_COOKIE with ||| separator
+ *
+ * Numbered format takes priority if any SUNO_COOKIE_X variables exist.
+ */
+export function getAllCookies(): string[] {
+  // First, check for numbered format (SUNO_COOKIE_1, SUNO_COOKIE_2, etc.)
+  const numberedCookies: string[] = [];
+  for (let i = 1; i <= 100; i++) { // Support up to 100 accounts
+    const cookieValue = process.env[`SUNO_COOKIE_${i}`];
+    if (cookieValue && cookieValue.trim().length > 0) {
+      numberedCookies.push(cookieValue.trim());
+    } else if (i > 1 && numberedCookies.length > 0) {
+      // Stop when we hit a gap after finding at least one
+      break;
+    }
+  }
+
+  if (numberedCookies.length > 0) {
+    return numberedCookies;
+  }
+
+  // Fall back to legacy format (SUNO_COOKIE with ||| separator)
+  const cookieEnv = process.env.SUNO_COOKIE || '';
+  if (cookieEnv.includes('|||')) {
+    return cookieEnv.split('|||').map(c => c.trim()).filter(c => c.length > 0);
+  }
+
+  // Single cookie
+  if (cookieEnv.trim().length > 0) {
+    return [cookieEnv.trim()];
+  }
+
+  return [];
+}
+
 /**
  * Get the number of configured cookie accounts
  */
 export function getCookieCount(): number {
-  const cookieEnv = process.env.SUNO_COOKIE || '';
-  if (!cookieEnv.includes('|||')) return 1;
-  return cookieEnv.split('|||').filter(c => c.trim().length > 0).length;
+  return getAllCookies().length || 1;
 }
-
-const logger = pino();
 export const DEFAULT_MODEL = 'chirp-crow'; // v5 (newest)
 
 /**
@@ -194,20 +231,21 @@ function sanitize(data: any): any {
  * @throws Error if required environment variables are missing or invalid
  */
 function validateEnvironment(): void {
-  const requiredVars = {
-    SUNO_COOKIE: process.env.SUNO_COOKIE,
-    TWOCAPTCHA_KEY: process.env.TWOCAPTCHA_KEY
-  };
-
   const missing: string[] = [];
   const invalid: string[] = [];
 
-  for (const [name, value] of Object.entries(requiredVars)) {
-    if (!value) {
-      missing.push(name);
-    } else if (typeof value !== 'string' || value.trim().length === 0) {
-      invalid.push(name);
-    }
+  // Check for cookies (supports SUNO_COOKIE_1, SUNO_COOKIE_2 or SUNO_COOKIE)
+  const cookies = getAllCookies();
+  if (cookies.length === 0) {
+    missing.push('SUNO_COOKIE (or SUNO_COOKIE_1, SUNO_COOKIE_2, etc.)');
+  }
+
+  // Check for 2captcha key
+  const twoCaptchaKey = process.env.TWOCAPTCHA_KEY;
+  if (!twoCaptchaKey) {
+    missing.push('TWOCAPTCHA_KEY');
+  } else if (typeof twoCaptchaKey !== 'string' || twoCaptchaKey.trim().length === 0) {
+    invalid.push('TWOCAPTCHA_KEY');
   }
 
   if (missing.length > 0) {
@@ -223,7 +261,8 @@ function validateEnvironment(): void {
   }
 
   logger.info({
-    variables: Object.keys(requiredVars)
+    variables: ['SUNO_COOKIE', 'TWOCAPTCHA_KEY'],
+    cookieCount: cookies.length
   }, 'Environment validation passed');
 }
 
@@ -653,7 +692,7 @@ class SunoApi {
     const resp = await this.client.post(`${SunoApi.BASE_URL}/api/c/check`, {
       ctype: 'generation'
     });
-    logger.debug(sanitize(resp.data), 'CAPTCHA check response');
+    logger.info(sanitize(resp.data), 'CAPTCHA check response');
     return resp.data.required;
   }
 
@@ -783,7 +822,7 @@ class SunoApi {
     for (const key in this.cookies) {
       if (key.startsWith('__client_uat_') && this.cookies[key] && this.cookies[key] !== '0') {
         clientUatTimestamp = this.cookies[key]!;
-        logger.debug(`Found session-variant UAT: ${key}=${clientUatTimestamp}`);
+        logger.info(`Found session-variant UAT: ${key}=${clientUatTimestamp}`);
         break;
       }
     }
@@ -807,13 +846,13 @@ class SunoApi {
         sameSite: lax,
         secure: true
       });
-      logger.debug(`Setting __client_uat=${clientUatTimestamp} on .suno.com`);
+      logger.info(`Setting __client_uat=${clientUatTimestamp} on .suno.com`);
     } else {
       logger.warn('No valid __client_uat timestamp found! Browser auth will fail.');
     }
 
     // Log cookies being set for debugging
-    logger.debug({ cookies: cookies.map(c => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) }, 'Setting browser cookies:');
+    logger.info({ cookies: cookies.map(c => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) }, 'Setting browser cookies:');
 
     await context.addCookies(cookies);
 
@@ -1048,8 +1087,8 @@ class SunoApi {
             const headers = request.headers();
             const postData = request.postDataJSON() as { token?: string; hcaptcha_token?: string } | null;
 
-            logger.debug(sanitize(headers), 'Request headers');
-            logger.debug(sanitize(postData), 'Request post data');
+            logger.info(sanitize(headers), 'Request headers');
+            logger.info(sanitize(postData), 'Request post data');
 
             // Extract token from post data if it exists
             const token = postData?.token || postData?.hcaptcha_token;
@@ -2548,20 +2587,25 @@ class SunoApi {
  * ```
  */
 export const sunoApi = async (cookie?: string, accountIndex?: number) => {
-  let resolvedCookie = cookie && cookie.includes('__client') ? cookie : process.env.SUNO_COOKIE;
+  let resolvedCookie: string | undefined;
   let usedAccountIndex: number | undefined;
 
-  if (!resolvedCookie) {
-    logger.info('No cookie provided! Aborting...\nPlease provide a cookie either in the .env file or in the Cookie header of your request.')
-    throw new Error('Please provide a cookie either in the .env file or in the Cookie header of your request.');
-  }
+  // If a custom cookie is provided in the request, use it directly
+  if (cookie && cookie.includes('__client')) {
+    resolvedCookie = cookie;
+  } else {
+    // Get cookies from environment (supports SUNO_COOKIE_1, SUNO_COOKIE_2 or SUNO_COOKIE with |||)
+    const cookies = getAllCookies();
 
-  // Handle multi-cookie selection
-  if (!cookie && resolvedCookie.includes('|||')) {
-    const cookies = resolvedCookie.split('|||').map(c => c.trim()).filter(c => c.length > 0);
-    if (cookies.length > 0) {
-      // If accountIndex is specified, use that specific account
+    if (cookies.length === 0) {
+      logger.info('No cookie provided! Aborting...\nPlease provide a cookie either in the .env file or in the Cookie header of your request.')
+      throw new Error('Please provide a cookie either in the .env file or in the Cookie header of your request.');
+    }
+
+    if (cookies.length > 1) {
+      // Multi-cookie setup
       if (accountIndex !== undefined) {
+        // Use specified account
         if (accountIndex < 0 || accountIndex >= cookies.length) {
           throw new Error(`Invalid account index ${accountIndex}. Must be between 0 and ${cookies.length - 1}`);
         }
@@ -2575,7 +2619,14 @@ export const sunoApi = async (cookie?: string, accountIndex?: number) => {
         logger.info(`Using account #${usedAccountIndex + 1} of ${cookies.length} for rotation`);
         globalForSunoApi.currentCookieIndex!++;
       }
+    } else {
+      // Single cookie
+      resolvedCookie = cookies[0];
     }
+  }
+
+  if (!resolvedCookie) {
+    throw new Error('Please provide a cookie either in the .env file or in the Cookie header of your request.');
   }
 
   // Check if the instance for this cookie already exists in the cache
