@@ -1168,12 +1168,14 @@ class SunoApi {
         lastError = error;
 
         // Check if this is a retryable network/browser error
-        const isRetryable = error.message.includes('net::ERR_') ||
-                           error.message.includes('SOCKET') ||
-                           error.message.includes('timeout') ||
-                           error.message.includes('Navigation') ||
-                           error.message.includes('Target closed') ||
-                           error.message.includes('browser has been closed');
+        const errorMsg = error.message.toLowerCase();
+        const isRetryable = errorMsg.includes('net::err_') ||
+                           errorMsg.includes('socket') ||
+                           errorMsg.includes('timeout') ||
+                           errorMsg.includes('navigation') ||
+                           errorMsg.includes('target closed') ||
+                           errorMsg.includes('browser has been closed') ||
+                           errorMsg.includes('waiting for locator');
 
         // Clean up browser on error
         if (browser) {
