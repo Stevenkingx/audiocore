@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await scanAllAccountsForPersonas();
-    const mappings = getAllPersonaMappings();
+    const mappings = await getAllPersonaMappings();
 
     return new NextResponse(JSON.stringify({
       ...result,

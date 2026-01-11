@@ -17,6 +17,7 @@ const globalForSunoApi = global as unknown as {
   sunoApiCache?: Map<string, SunoApi>,
   currentCookieIndex?: number,
   personaAccountMap?: Map<string, number>,
+  personaMappingsLoaded?: boolean,
   cookieCount?: number
 };
 const cache = globalForSunoApi.sunoApiCache || new Map<string, SunoApi>();
@@ -27,35 +28,105 @@ if (globalForSunoApi.currentCookieIndex === undefined) {
   globalForSunoApi.currentCookieIndex = 0;
 }
 
+const logger = pino();
+
+// === Persona Account Mapping with JSON Persistence ===
+const PERSONA_MAPPINGS_FILE = path.join(process.cwd(), 'data', 'persona-mappings.json');
+
 // Map persona_id -> account index for automatic routing
 if (!globalForSunoApi.personaAccountMap) {
   globalForSunoApi.personaAccountMap = new Map<string, number>();
 }
+if (globalForSunoApi.personaMappingsLoaded === undefined) {
+  globalForSunoApi.personaMappingsLoaded = false;
+}
 const personaAccountMap = globalForSunoApi.personaAccountMap;
 
 /**
- * Register a persona to a specific account index
+ * Load persona mappings from JSON file
+ */
+async function loadPersonaMappings(): Promise<void> {
+  if (globalForSunoApi.personaMappingsLoaded) return;
+
+  try {
+    await fs.mkdir(path.dirname(PERSONA_MAPPINGS_FILE), { recursive: true });
+    const data = await fs.readFile(PERSONA_MAPPINGS_FILE, 'utf-8');
+    const mappings = JSON.parse(data) as Record<string, number>;
+
+    for (const [personaId, accountIndex] of Object.entries(mappings)) {
+      personaAccountMap.set(personaId, accountIndex);
+    }
+
+    globalForSunoApi.personaMappingsLoaded = true;
+    logger.info({ count: Object.keys(mappings).length }, 'Loaded persona mappings from file');
+  } catch (error) {
+    // File doesn't exist yet, that's ok
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn({ error: (error as Error).message }, 'Failed to load persona mappings');
+    }
+    globalForSunoApi.personaMappingsLoaded = true;
+  }
+}
+
+/**
+ * Save persona mappings to JSON file
+ */
+async function savePersonaMappings(): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(PERSONA_MAPPINGS_FILE), { recursive: true });
+    const mappings = Object.fromEntries(personaAccountMap);
+    await fs.writeFile(PERSONA_MAPPINGS_FILE, JSON.stringify(mappings, null, 2));
+  } catch (error) {
+    logger.error({ error: (error as Error).message }, 'Failed to save persona mappings');
+  }
+}
+
+/**
+ * Register a persona to a specific account index (persisted to file)
  */
 export function registerPersonaAccount(personaId: string, accountIndex: number): void {
   personaAccountMap.set(personaId, accountIndex);
+  // Save asynchronously without blocking
+  savePersonaMappings().catch(() => {});
   logger.info(`Registered persona ${personaId} to account #${accountIndex + 1}`);
 }
 
 /**
- * Get the account index for a persona, or undefined if not registered
+ * Get the account index for a persona.
+ * First checks memory cache, then loads from file if needed.
+ */
+export async function getPersonaAccountAsync(personaId: string): Promise<number | undefined> {
+  // Ensure mappings are loaded from file
+  await loadPersonaMappings();
+  return personaAccountMap.get(personaId);
+}
+
+/**
+ * Get the account index for a persona (sync version, may not have file data)
+ * @deprecated Use getPersonaAccountAsync for reliable results
  */
 export function getPersonaAccount(personaId: string): number | undefined {
+  // Trigger async load if not done yet
+  if (!globalForSunoApi.personaMappingsLoaded) {
+    loadPersonaMappings().catch(() => {});
+  }
   return personaAccountMap.get(personaId);
 }
 
 /**
  * Get all registered persona mappings
  */
-export function getAllPersonaMappings(): Record<string, number> {
+export async function getAllPersonaMappings(): Promise<Record<string, number>> {
+  await loadPersonaMappings();
   return Object.fromEntries(personaAccountMap);
 }
 
-const logger = pino();
+/**
+ * Get all registered persona mappings (sync version)
+ */
+export function getAllPersonaMappingsSync(): Record<string, number> {
+  return Object.fromEntries(personaAccountMap);
+}
 
 /**
  * Get all configured cookies from environment variables.

@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { cookies } from 'next/headers';
-import { DEFAULT_MODEL, sunoApi, getPersonaAccount } from "@/lib/SunoApi";
+import { DEFAULT_MODEL, sunoApi, getPersonaAccountAsync } from "@/lib/SunoApi";
 import { corsHeaders } from "@/lib/utils";
 import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
 
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       // If persona_id is provided, route to the correct account automatically
       let accountIndex: number | undefined;
       if (persona_id) {
-        accountIndex = getPersonaAccount(persona_id);
+        accountIndex = await getPersonaAccountAsync(persona_id);
         if (accountIndex !== undefined) {
           console.log(`Routing to account #${accountIndex + 1} for persona ${persona_id}`);
         }
