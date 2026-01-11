@@ -8,6 +8,7 @@
   "tags": [
     { "name": "Generation" },
     { "name": "AI Enhancement" },
+    { "name": "Persona" },
     { "name": "Management" }
   ],
   "paths": {
@@ -162,6 +163,7 @@
     "/api/custom_generate": {
       "post": {
         "summary": "Custom Generation",
+        "description": "Generate music with custom lyrics, style tags, and title. Optionally use a persona (voice profile) for vocal consistency.",
         "tags": [
           "Generation"
         ],
@@ -178,25 +180,56 @@
                 "properties": {
                   "prompt": {
                     "type": "string",
-                    "description": "Lyrics.",
+                    "description": "Lyrics for the song.",
                     "example": "[Verse 1]\nNeon lights in the rain..."
                   },
                   "tags": {
                     "type": "string",
+                    "description": "Musical style tags.",
                     "example": "synthwave neon nocturnal"
                   },
                   "title": {
                     "type": "string",
+                    "description": "Title for the song.",
                     "example": "Midnight City"
+                  },
+                  "make_instrumental": {
+                    "type": "boolean",
+                    "description": "Generate instrumental only (default: false)",
+                    "default": false,
+                    "example": false
                   },
                   "model": {
                     "type": "string",
+                    "description": "Model version (default: chirp-crow)",
                     "default": "chirp-crow",
                     "example": "chirp-crow"
                   },
                   "wait_audio": {
                     "type": "boolean",
-                    "default": false
+                    "description": "Wait for generation to complete (default: false)",
+                    "default": false,
+                    "example": true
+                  },
+                  "negative_tags": {
+                    "type": "string",
+                    "description": "Style elements to avoid",
+                    "example": "slow, acoustic"
+                  },
+                  "persona_id": {
+                    "type": "string",
+                    "description": "Optional persona ID for vocal consistency. Requires artist_clip_id.",
+                    "example": "ce93a372-48f8-4ff7-aaa9-d57f871b75dd"
+                  },
+                  "artist_clip_id": {
+                    "type": "string",
+                    "description": "Original clip ID the persona was created from. Required when using persona_id. You can also use 'root_clip_id' instead.",
+                    "example": "aca95097-79d7-4120-b9b7-42a9cdc07ce2"
+                  },
+                  "root_clip_id": {
+                    "type": "string",
+                    "description": "Alias for artist_clip_id. Use the root_clip_id value from /api/personas response.",
+                    "example": "aca95097-79d7-4120-b9b7-42a9cdc07ce2"
                   }
                 }
               }
@@ -205,7 +238,23 @@
         },
         "responses": {
           "200": {
-            "description": "success"
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/audio_info"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "402": {
+            "description": "Insufficient credits"
           }
         }
       }
@@ -247,6 +296,509 @@
           }
         }
       }
+    },
+    "/api/get_wav": {
+      "get": {
+        "summary": "Download WAV Audio (Pro)",
+        "description": "Get the WAV file URL for a song. This is a Pro feature that provides lossless audio quality. The endpoint initiates conversion and waits for the WAV to be ready.",
+        "tags": [
+          "Management"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The song ID to download as WAV",
+            "example": "1945cb16-81d6-4448-b8d2-4a73841abb0a"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WAV URL retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wav_url": {
+                      "type": "string",
+                      "description": "Direct URL to download the WAV file",
+                      "example": "https://cdn1.suno.ai/1945cb16-81d6-4448-b8d2-4a73841abb0a.wav"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameter: id"
+          },
+          "403": {
+            "description": "Pro subscription required"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/generate_stems": {
+      "post": {
+        "summary": "Generate Stems from Audio",
+        "description": "Extract isolated audio stems (vocals, instrumental, etc.) from a complete song. Returns stem IDs that can be used to download the separated tracks.",
+        "tags": [
+          "Generation"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["audio_id"],
+                "properties": {
+                  "audio_id": {
+                    "type": "string",
+                    "description": "ID of the song to extract stems from",
+                    "example": "1945cb16-81d6-4448-b8d2-4a73841abb0a"
+                  },
+                  "stem_type": {
+                    "type": "string",
+                    "enum": ["two", "all"],
+                    "default": "two",
+                    "description": "Type of stem extraction: 'two' for Vocals+Instrumental (10 credits), 'all' for all detected stems (50 credits)",
+                    "example": "two"
+                  },
+                  "wait": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, waits for stem generation to complete before returning",
+                    "example": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stems generated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Stem clip ID"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "Stem title (e.g., 'Lead Vocals', 'Instrumental')"
+                      },
+                      "status": {
+                        "type": "string",
+                        "description": "Generation status"
+                      },
+                      "audio_url": {
+                        "type": "string",
+                        "description": "URL to MP3 file (when complete)"
+                      },
+                      "stem_from_id": {
+                        "type": "string",
+                        "description": "Original song ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "402": {
+            "description": "Insufficient credits"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/download_stems": {
+      "post": {
+        "summary": "Download Stems as WAV (Pro)",
+        "description": "Generate stems from a song and download them as WAV files. This is a Pro feature that combines stem generation with WAV conversion. Returns WAV URLs for each stem.",
+        "tags": [
+          "Management"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["audio_id"],
+                "properties": {
+                  "audio_id": {
+                    "type": "string",
+                    "description": "ID of the song to extract stems from",
+                    "example": "1945cb16-81d6-4448-b8d2-4a73841abb0a"
+                  },
+                  "stem_type": {
+                    "type": "string",
+                    "enum": ["two", "all"],
+                    "default": "two",
+                    "description": "Type of stem extraction: 'two' for Vocals+Instrumental (10 credits), 'all' for all detected stems (50 credits)",
+                    "example": "two"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stems downloaded as WAV successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Stem clip ID"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "Stem title"
+                      },
+                      "wav_url": {
+                        "type": "string",
+                        "description": "URL to download WAV file",
+                        "example": "https://cdn1.suno.ai/stem-id.wav"
+                      },
+                      "audio_url": {
+                        "type": "string",
+                        "description": "URL to MP3 file"
+                      },
+                      "stem_from_id": {
+                        "type": "string",
+                        "description": "Original song ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "402": {
+            "description": "Insufficient credits"
+          },
+          "403": {
+            "description": "Pro subscription required for WAV download"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/personas": {
+      "get": {
+        "summary": "List User Personas",
+        "description": "Get list of user's personas (voice profiles). Personas can be used to maintain vocal consistency across generated songs.",
+        "tags": [
+          "Persona"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": { "type": "number" },
+            "description": "Page number for pagination (default: 1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Personas retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "personas": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/persona_info"
+                      }
+                    },
+                    "total_results": {
+                      "type": "number",
+                      "description": "Total number of personas"
+                    },
+                    "current_page": {
+                      "type": "number",
+                      "description": "Current page number"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/persona": {
+      "get": {
+        "summary": "Get Persona Details",
+        "description": "Get detailed information about a specific persona by ID.",
+        "tags": [
+          "Persona"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The persona ID to retrieve",
+            "example": "ce93a372-48f8-4ff7-aaa9-d57f871b75dd"
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": { "type": "number" },
+            "description": "Page number for persona clips pagination (default: 1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persona details retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/persona_info"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameter: id"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/persona/delete": {
+      "delete": {
+        "summary": "Delete Persona",
+        "description": "Delete (trash) a persona. Can also restore a previously deleted persona by setting undo=true.",
+        "tags": [
+          "Persona"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The persona ID to delete",
+            "example": "ce93a372-48f8-4ff7-aaa9-d57f871b75dd"
+          },
+          {
+            "in": "query",
+            "name": "undo",
+            "schema": { "type": "boolean" },
+            "description": "Set to true to restore a previously deleted persona (default: false)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persona deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "description": "Whether the operation was successful"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameter: id"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/persona/create": {
+      "post": {
+        "summary": "Create Persona",
+        "description": "Create a persona (voice profile) from a song clip. First call /api/persona/vox-stem to extract vocals and get the vox_audio_id, then use it here. Personas are NOT public by default.",
+        "tags": [
+          "Persona"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["clip_id", "name"],
+                "properties": {
+                  "clip_id": {
+                    "type": "string",
+                    "description": "ID of the original song clip",
+                    "example": "c3776feb-6b58-4229-aeb6-e27c716c77fc"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Name for the persona",
+                    "example": "My Voice"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional description for the persona",
+                    "example": "My custom voice profile for pop songs"
+                  },
+                  "is_public": {
+                    "type": "boolean",
+                    "description": "Whether the persona should be public (default: false)",
+                    "default": false,
+                    "example": false
+                  },
+                  "vox_audio_id": {
+                    "type": "string",
+                    "description": "ID from /api/persona/vox-stem response. Required for proper persona creation.",
+                    "example": "1c9b8d6f-02d9-4446-bb4f-c4b8b939ced1"
+                  },
+                  "vocal_start_s": {
+                    "type": "number",
+                    "description": "Start time in seconds for the vocal sample (default: 0)",
+                    "default": 0,
+                    "example": 0
+                  },
+                  "vocal_end_s": {
+                    "type": "number",
+                    "description": "End time in seconds for the vocal sample (default: 30)",
+                    "default": 30,
+                    "example": 30
+                  },
+                  "user_input_styles": {
+                    "type": "string",
+                    "description": "Optional style tags for the persona",
+                    "example": "rock, alternative, male vocals"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Persona created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/persona_info"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/persona/vox-stem": {
+      "post": {
+        "summary": "Extract Vox Stem",
+        "description": "Extract vox (vocal) stem from a song for persona creation. This must be called before creating a persona to get the vox_audio_id. The extraction process isolates the vocal track from the specified time range.",
+        "tags": [
+          "Persona"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["clip_id"],
+                "properties": {
+                  "clip_id": {
+                    "type": "string",
+                    "description": "ID of the song to extract vocals from",
+                    "example": "c3776feb-6b58-4229-aeb6-e27c716c77fc"
+                  },
+                  "vocal_start_s": {
+                    "type": "number",
+                    "description": "Start time in seconds for vocal extraction (default: 0)",
+                    "default": 0,
+                    "example": 45
+                  },
+                  "vocal_end_s": {
+                    "type": "number",
+                    "description": "End time in seconds for vocal extraction (default: 30). Max 30 seconds range.",
+                    "default": 30,
+                    "example": 75
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vox stem extracted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "vox_audio_id": {
+                      "type": "string",
+                      "description": "ID of the extracted vox stem. Use this in /api/persona/create."
+                    },
+                    "clip_id": {
+                      "type": "string",
+                      "description": "Original clip ID"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -258,6 +810,59 @@
           "title": { "type": "string" },
           "audio_url": { "type": "string" },
           "status": { "type": "string" }
+        }
+      },
+      "persona_info": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the persona"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the persona"
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of the persona"
+          },
+          "image_url": {
+            "type": "string",
+            "description": "URL of the persona's image"
+          },
+          "root_clip_id": {
+            "type": "string",
+            "description": "ID of the original clip used to create the persona"
+          },
+          "vox_audio_id": {
+            "type": "string",
+            "description": "ID of the extracted vox stem used for this persona"
+          },
+          "user_display_name": {
+            "type": "string",
+            "description": "Display name of the persona owner"
+          },
+          "user_handle": {
+            "type": "string",
+            "description": "Handle of the persona owner"
+          },
+          "is_public": {
+            "type": "boolean",
+            "description": "Whether the persona is public"
+          },
+          "is_owned": {
+            "type": "boolean",
+            "description": "Whether the current user owns the persona"
+          },
+          "clip_count": {
+            "type": "number",
+            "description": "Number of clips created with this persona"
+          },
+          "upvote_count": {
+            "type": "number",
+            "description": "Number of upvotes for this persona"
+          }
         }
       }
     }

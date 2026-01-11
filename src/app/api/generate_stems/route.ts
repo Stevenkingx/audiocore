@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   if (req.method === 'POST') {
     try {
       const body = await req.json();
-      const { audio_id } = body;
+      const { audio_id, stem_type = 'two', wait = false } = body;
 
       if (!audio_id) {
         return new NextResponse(JSON.stringify({ error: 'Audio ID is required' }), {
@@ -29,8 +29,19 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      // Validate stem_type
+      if (stem_type !== 'two' && stem_type !== 'all') {
+        return new NextResponse(JSON.stringify({ error: 'stem_type must be "two" or "all"' }), {
+          status: 400,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders
+          }
+        });
+      }
+
       const audioInfo = await (await sunoApi((await cookies()).toString()))
-        .generateStems(audio_id);
+        .generateStems(audio_id, stem_type, wait);
 
       return new NextResponse(JSON.stringify(audioInfo), {
         status: 200,

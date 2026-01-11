@@ -264,6 +264,51 @@ export interface AudioInfo {
 }
 
 /**
+ * Simplified persona information for listing
+ */
+export interface PersonaInfo {
+  id: string;
+  name: string;
+  description?: string;
+  image_url?: string;
+  root_clip_id: string;
+  vox_audio_id?: string;
+  user_display_name?: string;
+  user_handle?: string;
+  is_public: boolean;
+  is_owned: boolean;
+  clip_count: number;
+  upvote_count?: number;
+}
+
+/**
+ * Response structure for persona list API calls
+ */
+interface PersonaListResponse {
+  personas: Array<{
+    id: string;
+    name: string;
+    description: string;
+    image_s3_id: string;
+    root_clip_id: string;
+    clip: ClipInfo;
+    user_display_name: string;
+    user_handle: string;
+    user_image_url: string;
+    is_suno_persona: boolean;
+    is_trashed: boolean;
+    is_owned: boolean;
+    is_public: boolean;
+    is_public_approved: boolean;
+    is_loved: boolean;
+    upvote_count: number;
+    clip_count: number;
+  }>;
+  total_results: number;
+  current_page: number;
+}
+
+/**
  * Response structure for persona-related API calls
  */
 interface PersonaResponse {
@@ -416,6 +461,12 @@ class SunoApi {
     // Overall operation timeouts
     /** Maximum time to wait for audio generation completion */
     AUDIO_GENERATION_MAX: Number(process.env.TIMEOUT_AUDIO_GENERATION_MAX) || 100000,
+
+    // Retry configuration
+    /** Number of retries for browser/network errors */
+    BROWSER_RETRIES: Number(process.env.BROWSER_RETRIES) || 3,
+    /** Delay between browser retries (seconds) */
+    BROWSER_RETRY_DELAY: Number(process.env.BROWSER_RETRY_DELAY) || 2,
   } as const;
 
   private readonly client: AxiosInstance;
@@ -846,13 +897,25 @@ class SunoApi {
    * ```
    */
   public async getCaptcha(): Promise<string|null> {
-    const browser = await this.launchBrowser();
-    const page = await browser.newPage();
+    const maxRetries = SunoApi.TIMEOUTS.BROWSER_RETRIES;
+    let lastError: Error | null = null;
 
-    // STEP 1: Navigate to homepage first to let Clerk JS establish session
-    // We don't have __session cookie - Clerk JS needs to create it by validating __client with auth.suno.com
-    logger.info('Step 1: Navigating to suno.com homepage to establish Clerk session...');
-    await page.goto('https://suno.com', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: SunoApi.TIMEOUTS.PAGE_NAVIGATION });
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let browser: Awaited<ReturnType<typeof this.launchBrowser>> | null = null;
+
+      try {
+        if (attempt > 1) {
+          logger.info(`Browser retry attempt ${attempt}/${maxRetries}...`);
+          await sleep(SunoApi.TIMEOUTS.BROWSER_RETRY_DELAY);
+        }
+
+        browser = await this.launchBrowser();
+        const page = await browser.newPage();
+
+        // STEP 1: Navigate to homepage first to let Clerk JS establish session
+        // We don't have __session cookie - Clerk JS needs to create it by validating __client with auth.suno.com
+        logger.info('Step 1: Navigating to suno.com homepage to establish Clerk session...');
+        await page.goto('https://suno.com', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: SunoApi.TIMEOUTS.PAGE_NAVIGATION });
 
     // Wait for Clerk JS to authenticate (it calls auth.suno.com/v1/client and sets __session)
     logger.info('Waiting for Clerk JS to establish session...');
@@ -956,13 +1019,15 @@ class SunoApi {
             logger.info('Aborting request and closing browser');
 
             route.abort();
-            const browserInstance = browser.browser();
-            if (browserInstance) {
-              browserInstance.close().catch(closeError => {
-                logger.error({ error: toError(closeError) }, 'Failed to close browser during route interception');
-              });
-            } else {
-              logger.warn('Browser instance not available for cleanup during route interception');
+            if (browser) {
+              const browserInstance = browser.browser();
+              if (browserInstance) {
+                browserInstance.close().catch(closeError => {
+                  logger.error({ error: toError(closeError) }, 'Failed to close browser during route interception');
+                });
+              } else {
+                logger.warn('Browser instance not available for cleanup during route interception');
+              }
             }
             controller.abort();
 
@@ -1079,22 +1144,59 @@ class SunoApi {
       }
     }).catch(e => {
       const error = toError(e);
-      const browserInstance = browser.browser();
-      if (browserInstance) {
-        browserInstance.close().catch(closeError => {
-          logger.error({ error: toError(closeError) }, 'Failed to close browser after CAPTCHA error');
-        });
-      } else {
-        logger.warn('Browser instance not available for cleanup after CAPTCHA error');
+      if (browser) {
+        const browserInstance = browser.browser();
+        if (browserInstance) {
+          browserInstance.close().catch(closeError => {
+            logger.error({ error: toError(closeError) }, 'Failed to close browser after CAPTCHA error');
+          });
+        } else {
+          logger.warn('Browser instance not available for cleanup after CAPTCHA error');
+        }
       }
       throw error;
     });
 
-    // Wait for either tokenPromise or captchaSolvingPromise to complete
-    // This ensures proper coordination between token extraction and CAPTCHA solving
-    await Promise.race([tokenPromise, captchaSolvingPromise]);
+        // Wait for either tokenPromise or captchaSolvingPromise to complete
+        // This ensures proper coordination between token extraction and CAPTCHA solving
+        await Promise.race([tokenPromise, captchaSolvingPromise]);
 
-    return tokenPromise;
+        return tokenPromise;
+
+      } catch (e) {
+        const error = toError(e);
+        lastError = error;
+
+        // Check if this is a retryable network/browser error
+        const isRetryable = error.message.includes('net::ERR_') ||
+                           error.message.includes('SOCKET') ||
+                           error.message.includes('timeout') ||
+                           error.message.includes('Navigation') ||
+                           error.message.includes('Target closed') ||
+                           error.message.includes('browser has been closed');
+
+        // Clean up browser on error
+        if (browser) {
+          const browserInstance = browser.browser();
+          if (browserInstance) {
+            await browserInstance.close().catch(closeError => {
+              logger.error({ error: toError(closeError) }, 'Failed to close browser during retry cleanup');
+            });
+          }
+        }
+
+        if (isRetryable && attempt < maxRetries) {
+          logger.warn(`Browser error (attempt ${attempt}/${maxRetries}): ${error.message}. Retrying...`);
+          continue;
+        }
+
+        // Not retryable or exhausted retries
+        throw error;
+      }
+    }
+
+    // Should never reach here, but just in case
+    throw lastError || new Error('getCaptcha failed after all retries');
   }
 
 
@@ -1184,6 +1286,7 @@ class SunoApi {
   /**
    * Generate music with custom lyrics, style tags, and title.
    * Provides full control over song generation with explicit lyrics and metadata.
+   * Optionally use a persona (voice profile) for vocal consistency.
    *
    * @param prompt - Custom lyrics or vocal content for the song
    * @param tags - Musical style tags (e.g., "jazz, piano, slow tempo")
@@ -1192,11 +1295,14 @@ class SunoApi {
    * @param model - Model version to use. Defaults to 'chirp-crow' (v5)
    * @param wait_audio - If true, waits until generation completes. Defaults to false
    * @param negative_tags - Style elements to avoid (e.g., "electronic, drums")
+   * @param persona_id - Optional ID of persona to use for vocal consistency
+   * @param artist_clip_id - Optional ID of the original clip the persona was created from (required if persona_id is provided)
    * @returns Promise resolving to array of AudioInfo objects (typically 2 variations)
    * @throws Error if required parameters are empty or generation fails
    *
    * @example
    * ```typescript
+   * // Without persona
    * const songs = await api.custom_generate(
    *   '[Verse]\nCoding all night long\n[Chorus]\nBugs are everywhere',
    *   'indie rock, energetic, electric guitar',
@@ -1205,6 +1311,19 @@ class SunoApi {
    *   undefined,
    *   true,
    *   'slow, acoustic'
+   * );
+   *
+   * // With persona
+   * const songsWithPersona = await api.custom_generate(
+   *   '[Verse]\nHello world...',
+   *   'pop, upbeat',
+   *   'My Song',
+   *   false,
+   *   undefined,
+   *   true,
+   *   undefined,
+   *   'persona-id-123',
+   *   'artist-clip-id-456'
    * );
    * ```
    */
@@ -1215,13 +1334,23 @@ class SunoApi {
     make_instrumental: boolean = false,
     model?: string,
     wait_audio: boolean = false,
-    negative_tags?: string
+    negative_tags?: string,
+    persona_id?: string,
+    artist_clip_id?: string
   ): Promise<AudioInfo[]> {
     validateRequiredString(prompt, 'prompt');
     validateRequiredString(tags, 'tags');
     validateRequiredString(title, 'title');
     validateOptionalString(model, 'model');
     validateOptionalString(negative_tags, 'negative_tags');
+    validateOptionalString(persona_id, 'persona_id');
+    validateOptionalString(artist_clip_id, 'artist_clip_id');
+
+    // If persona_id is provided, artist_clip_id is required
+    if (persona_id && !artist_clip_id) {
+      throw new Error('artist_clip_id is required when using persona_id');
+    }
+
     const startTime = Date.now();
     const audios = await this.generateSongs(
       prompt,
@@ -1231,7 +1360,12 @@ class SunoApi {
       make_instrumental,
       model,
       wait_audio,
-      negative_tags
+      negative_tags,
+      persona_id ? 'vox' : undefined, // Use 'vox' task when using persona
+      undefined, // continue_clip_id
+      undefined, // continue_at
+      persona_id,
+      artist_clip_id
     );
     const costTime = Date.now() - startTime;
     logger.info(
@@ -1251,8 +1385,11 @@ class SunoApi {
    * @param make_instrumental Indicates if the generated song should be instrumental.
    * @param wait_audio Indicates if the method should wait for the audio file to be fully generated before returning.
    * @param negative_tags Negative tags that should not be included in the generated audio.
-   * @param task Optional indication of what to do. Enter 'extend' if extending an audio, otherwise specify null.
+   * @param task Optional indication of what to do. Enter 'extend' if extending an audio, 'vox' for persona generation.
    * @param continue_clip_id
+   * @param continue_at
+   * @param persona_id Optional persona ID for voice consistency.
+   * @param artist_clip_id Optional artist clip ID (required when using persona_id).
    * @returns A promise that resolves to an array of AudioInfo objects representing the generated songs.
    */
   private async generateSongs(
@@ -1266,37 +1403,81 @@ class SunoApi {
     negative_tags?: string,
     task?: string,
     continue_clip_id?: string,
-    continue_at?: number
+    continue_at?: number,
+    persona_id?: string,
+    artist_clip_id?: string
   ): Promise<AudioInfo[]> {
     // Validate task parameter if provided
     validateOptionalString(task, 'task');
     validateOptionalString(continue_clip_id, 'continue_clip_id');
     validateOptionalNumber(continue_at, 'continue_at');
+    validateOptionalString(persona_id, 'persona_id');
+    validateOptionalString(artist_clip_id, 'artist_clip_id');
 
     // If task is 'extend', validate required parameters
     if (task === 'extend') {
       validateRequiredString(continue_clip_id, 'continue_clip_id (required when task is "extend")');
     }
 
-    await this.keepAlive();
-    const payload: Partial<GenerateSongsPayload> = {
-      make_instrumental: make_instrumental,
-      mv: model || DEFAULT_MODEL,
-      prompt: '',
-      generation_type: task === 'extend' ? 'EXTEND' : 'TEXT',
-      continue_at: continue_at,
-      continue_clip_id: continue_clip_id,
-      task: task,
-      token: await this.getCaptcha()
-    };
-    if (isCustom) {
-      payload.tags = tags;
-      payload.title = title;
-      payload.negative_tags = negative_tags;
-      payload.prompt = prompt;
-    } else {
-      payload.gpt_description_prompt = prompt;
+    // If task is 'vox' (persona), validate required parameters
+    if (task === 'vox') {
+      validateRequiredString(persona_id, 'persona_id (required when task is "vox")');
+      validateRequiredString(artist_clip_id, 'artist_clip_id (required when task is "vox")');
     }
+
+    await this.keepAlive();
+
+    // Determine if we should use the v2-web endpoint (for persona generation)
+    const useWebEndpoint = task === 'vox' && persona_id && artist_clip_id;
+
+    let payload: Record<string, any>;
+    let endpoint: string;
+
+    if (useWebEndpoint) {
+      // Use v2-web endpoint for persona generation
+      endpoint = `${SunoApi.BASE_URL}/api/generate/v2-web/`;
+      payload = {
+        token: await this.getCaptcha(),
+        task: 'vox',
+        generation_type: 'TEXT',
+        title: title || '',
+        tags: tags || '',
+        negative_tags: negative_tags || '',
+        mv: model || DEFAULT_MODEL,
+        prompt: prompt,
+        make_instrumental: make_instrumental,
+        metadata: {
+          create_mode: 'custom',
+          create_session_token: randomUUID()
+        },
+        override_fields: ['prompt', 'tags'],
+        persona_id: persona_id,
+        artist_clip_id: artist_clip_id,
+        transaction_uuid: randomUUID()
+      };
+    } else {
+      // Use standard v2 endpoint
+      endpoint = `${SunoApi.BASE_URL}/api/generate/v2/`;
+      payload = {
+        make_instrumental: make_instrumental,
+        mv: model || DEFAULT_MODEL,
+        prompt: '',
+        generation_type: task === 'extend' ? 'EXTEND' : 'TEXT',
+        continue_at: continue_at,
+        continue_clip_id: continue_clip_id,
+        task: task,
+        token: await this.getCaptcha()
+      };
+      if (isCustom) {
+        payload.tags = tags;
+        payload.title = title;
+        payload.negative_tags = negative_tags;
+        payload.prompt = prompt;
+      } else {
+        payload.gpt_description_prompt = prompt;
+      }
+    }
+
     logger.info(sanitize({
       prompt: prompt,
       isCustom: isCustom,
@@ -1305,13 +1486,26 @@ class SunoApi {
       make_instrumental: make_instrumental,
       wait_audio: wait_audio,
       negative_tags: negative_tags,
+      persona_id: persona_id,
+      artist_clip_id: artist_clip_id,
+      endpoint: endpoint,
       payload: payload
     }), 'generateSongs payload');
+
+    // Browser-Token header required for v2-web endpoint
+    const headers: Record<string, string> = {};
+    if (useWebEndpoint) {
+      headers['Browser-Token'] = JSON.stringify({
+        token: Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString('base64')
+      });
+    }
+
     const response = await this.client.post<ClipsResponse>(
-      `${SunoApi.BASE_URL}/api/generate/v2/`,
+      endpoint,
       payload,
       {
-        timeout: SunoApi.TIMEOUTS.API_GENERATE
+        timeout: SunoApi.TIMEOUTS.API_GENERATE,
+        headers
       }
     );
     if (response.status !== 200) {
@@ -1449,35 +1643,191 @@ class SunoApi {
    * Useful for remixing or extracting individual track elements.
    *
    * @param song_id - ID of the song to split into stems
+   * @param stem_type - Type of stem extraction: 'two' for Vocals+Instrumental (10 credits), 'all' for all detected stems (50 credits). Defaults to 'two'
+   * @param wait_audio - If true, waits until stem generation is complete. Defaults to false
    * @returns Promise resolving to array of AudioInfo objects, one for each stem track
    * @throws Error if song_id is invalid or stem generation fails
    *
    * @example
    * ```typescript
-   * const stems = await api.generateStems('song-id-123');
-   * // stems[0] = vocals only
-   * // stems[1] = instrumental only
-   * // stems[2] = bass only
-   * // stems[3] = drums only
+   * // Generate Vocals + Instrumental (10 credits)
+   * const stems = await api.generateStems('song-id-123', 'two', true);
+   * // stems[0] = vocals (Version 1)
+   * // stems[1] = instrumental (Version 1)
+   * // stems[2] = vocals (Version 2)
+   * // stems[3] = instrumental (Version 2)
+   *
+   * // Generate all detected stems (50 credits)
+   * const allStems = await api.generateStems('song-id-123', 'all', true);
    * ```
    */
-  public async generateStems(song_id: string): Promise<AudioInfo[]> {
+  public async generateStems(
+    song_id: string,
+    stem_type: 'two' | 'all' = 'two',
+    wait_audio: boolean = false
+  ): Promise<AudioInfo[]> {
     validateRequiredString(song_id, 'song_id');
     await this.keepAlive(false);
+
+    // Get source clip info for title and model
+    const sourceClips = await this.get([song_id]);
+    const sourceClip = sourceClips[0];
+    const sourceTitle = sourceClip?.title || 'Untitled';
+    const sourceModel = sourceClip?.model_name || 'chirp-v3-5';
+
+    // Stem type configuration
+    const stemConfig = stem_type === 'all'
+      ? { stem_type_id: 92, stem_type_group_name: 'All', stem_task: 'all' }
+      : { stem_type_id: 91, stem_type_group_name: 'Two', stem_task: 'two' };
+
+    // Browser-Token header required by Suno API
+    const browserToken = JSON.stringify({
+      token: Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString('base64')
+    });
+
+    // Note: Stems don't require CAPTCHA token (token: null based on Suno's web app behavior)
+    const payload = {
+      token: null,
+      task: 'gen_stem',
+      generation_type: 'TEXT',
+      title: sourceTitle,
+      tags: sourceClip?.tags || '',
+      negative_tags: '',
+      mv: sourceModel,
+      prompt: '',
+      make_instrumental: true,
+      metadata: {
+        create_mode: 'custom',
+        is_remix: true
+      },
+      continue_clip_id: song_id,
+      ...stemConfig,
+      transaction_uuid: randomUUID()
+    };
+
+    logger.info(sanitize({ song_id, stem_type, sourceModel, payload }), 'generateStems payload');
+
     const response = await this.client.post<ClipsResponse>(
-      `${SunoApi.BASE_URL}/api/edit/stems/${song_id}`, {}
+      `${SunoApi.BASE_URL}/api/generate/v2-web/`,
+      payload,
+      {
+        timeout: SunoApi.TIMEOUTS.API_GENERATE,
+        headers: {
+          'Browser-Token': browserToken
+        }
+      }
     );
 
-    logger.info(sanitize(response?.data), 'generateStems response');
+    if (response.status !== 200) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    const stemIds = response.data.clips.map((clip) => clip.id);
+    logger.info({ stemIds }, 'Generated stem IDs');
+
+    // Wait for stem generation to complete if requested
+    if (wait_audio) {
+      const startTime = Date.now();
+      await sleep(SunoApi.TIMEOUTS.AUDIO_POLL_INITIAL_DELAY);
+
+      while (Date.now() - startTime < SunoApi.TIMEOUTS.AUDIO_GENERATION_MAX) {
+        // Skip keepAlive during polling to avoid rate limiting
+        const stemClips = await this.get(stemIds, null, true);
+        const allCompleted = stemClips.every(
+          (audio) => audio.status === 'streaming' || audio.status === 'complete'
+        );
+        const allError = stemClips.every((audio) => audio.status === 'error');
+
+        if (allCompleted || allError) {
+          return stemClips.map((clip): AudioInfo => ({
+            id: clip.id,
+            status: clip.status,
+            created_at: clip.created_at,
+            title: clip.title,
+            model_name: clip.model_name,
+            audio_url: clip.audio_url,
+            stem_from_id: song_id,
+            duration: clip.duration,
+            tags: clip.tags,
+            error_message: clip.error_message
+          }));
+        }
+
+        await sleep(SunoApi.TIMEOUTS.AUDIO_POLL_DELAY_MIN, SunoApi.TIMEOUTS.AUDIO_POLL_DELAY_MAX);
+      }
+    }
+
+    // Return initial response without waiting
     return response.data.clips.map((clip): AudioInfo => ({
       id: clip.id,
       status: clip.status,
       created_at: clip.created_at,
       title: clip.title,
       model_name: clip.model_name,
-      stem_from_id: clip.metadata.stem_from_id,
+      stem_from_id: song_id,
       duration: clip.metadata.duration
     }));
+  }
+
+  /**
+   * Download stems as WAV files (Pro feature).
+   * Generates stems from a song and returns WAV URLs for each stem.
+   *
+   * @param song_id - ID of the song to extract stems from
+   * @param stem_type - Type of stem extraction: 'two' for Vocals+Instrumental, 'all' for all stems. Defaults to 'two'
+   * @returns Promise resolving to array of objects with stem info and WAV URLs
+   * @throws Error if song_id is invalid, timeout occurs, or user doesn't have Pro subscription
+   *
+   * @example
+   * ```typescript
+   * const stemsWav = await api.downloadStemsWav('song-id-123', 'two');
+   * stemsWav.forEach(stem => {
+   *   console.log(`${stem.title}: ${stem.wav_url}`);
+   * });
+   * ```
+   */
+  public async downloadStemsWav(
+    song_id: string,
+    stem_type: 'two' | 'all' = 'two'
+  ): Promise<Array<{ id: string; title?: string; wav_url: string; audio_url?: string; stem_from_id: string }>> {
+    validateRequiredString(song_id, 'song_id');
+
+    // Step 1: Generate stems and wait for completion
+    logger.info(`Starting stem extraction for: ${song_id}, type: ${stem_type}`);
+    const stems = await this.generateStems(song_id, stem_type, true);
+
+    // Filter only completed stems
+    const completedStems = stems.filter(stem => stem.status === 'complete' || stem.status === 'streaming');
+
+    if (completedStems.length === 0) {
+      throw new Error('No stems were successfully generated');
+    }
+
+    // Step 2: Convert each stem to WAV
+    logger.info(`Converting ${completedStems.length} stems to WAV`);
+    const results: Array<{ id: string; title?: string; wav_url: string; audio_url?: string; stem_from_id: string }> = [];
+
+    for (const stem of completedStems) {
+      try {
+        const wavResult = await this.downloadWav(stem.id);
+        results.push({
+          id: stem.id,
+          title: stem.title,
+          wav_url: wavResult.wav_url,
+          audio_url: stem.audio_url,
+          stem_from_id: song_id
+        });
+      } catch (error) {
+        logger.error({ stemId: stem.id, error: toError(error).message }, 'Failed to convert stem to WAV');
+        // Continue with other stems even if one fails
+      }
+    }
+
+    if (results.length === 0) {
+      throw new Error('Failed to convert any stems to WAV');
+    }
+
+    return results;
   }
 
 
@@ -1555,9 +1905,12 @@ class SunoApi {
    */
   public async get(
     songIds?: string[],
-    page?: string | null
+    page?: string | null,
+    skipKeepAlive: boolean = false
   ): Promise<AudioInfo[]> {
-    await this.keepAlive(false);
+    if (!skipKeepAlive) {
+      await this.keepAlive(false);
+    }
     let url = new URL(`${SunoApi.BASE_URL}/api/feed/v2`);
     if (songIds) {
       url.searchParams.append('ids', songIds.join(','));
@@ -1696,6 +2049,416 @@ class SunoApi {
     }
 
     return response.data;
+  }
+
+  /**
+   * Get list of user's personas (voice profiles).
+   * Personas can be used to maintain vocal consistency across generated songs.
+   *
+   * @param page - Page number for pagination. Defaults to 1
+   * @returns Promise resolving to object with personas array and pagination info
+   * @throws Error if API request fails
+   *
+   * @example
+   * ```typescript
+   * const result = await api.getPersonas();
+   * result.personas.forEach(persona => {
+   *   console.log(`${persona.name} (${persona.id})`);
+   * });
+   * ```
+   */
+  public async getPersonas(page: number = 1): Promise<{ personas: PersonaInfo[]; total_results: number; current_page: number }> {
+    validateNumber(page, 'page');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/persona/get-personas/?page=${page}`;
+    logger.info(`Fetching user personas: ${url}`);
+
+    const response = await this.client.get<PersonaListResponse>(url, {
+      timeout: SunoApi.TIMEOUTS.API_PERSONA
+    });
+
+    if (response.status !== 200) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    const personas = response.data.personas.map((p): PersonaInfo => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      image_url: p.clip?.image_url || p.user_image_url,
+      root_clip_id: p.root_clip_id,
+      vox_audio_id: (p as any).vox_audio_id,
+      user_display_name: p.user_display_name,
+      user_handle: p.user_handle,
+      is_public: p.is_public,
+      is_owned: p.is_owned,
+      clip_count: p.clip_count,
+      upvote_count: p.upvote_count
+    }));
+
+    return {
+      personas,
+      total_results: response.data.total_results,
+      current_page: response.data.current_page
+    };
+  }
+
+  /**
+   * Get details of a specific persona by ID.
+   *
+   * @param personaId - ID of the persona to retrieve
+   * @returns Promise resolving to PersonaInfo object with persona details
+   * @throws Error if personaId is invalid or persona not found
+   *
+   * @example
+   * ```typescript
+   * const persona = await api.getPersona('persona-id-123');
+   * console.log(`Name: ${persona.name}`);
+   * console.log(`Clip ID: ${persona.root_clip_id}`);
+   * ```
+   */
+  public async getPersona(personaId: string): Promise<PersonaInfo> {
+    validateRequiredString(personaId, 'personaId');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/persona/get-persona/${personaId}/`;
+    logger.info(`Fetching persona: ${url}`);
+
+    const response = await this.client.get<{ persona: PersonaListResponse['personas'][0] }>(url, {
+      timeout: SunoApi.TIMEOUTS.API_PERSONA
+    });
+
+    if (response.status !== 200) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    const p = response.data.persona;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      image_url: p.clip?.image_url || p.user_image_url,
+      root_clip_id: p.root_clip_id,
+      vox_audio_id: (p as any).vox_audio_id,
+      user_display_name: p.user_display_name,
+      user_handle: p.user_handle,
+      is_public: p.is_public,
+      is_owned: p.is_owned,
+      clip_count: p.clip_count,
+      upvote_count: p.upvote_count
+    };
+  }
+
+  /**
+   * Create a persona (voice profile) from a song clip.
+   * First call extractVoxStem() to get the vox_audio_id, then pass it to this method.
+   * Personas are NOT public by default.
+   *
+   * @param clip_id - ID of the clip to create persona from (should be a vocals stem)
+   * @param name - Name for the persona
+   * @param description - Optional description for the persona
+   * @param is_public - Whether the persona should be public. Defaults to false
+   * @param vox_audio_id - The ID of the extracted vox stem (from extractVoxStem)
+   * @param vocal_start_s - Start time in seconds for the vocal sample
+   * @param vocal_end_s - End time in seconds for the vocal sample
+   * @param user_input_styles - Optional style tags for the persona
+   * @returns Promise resolving to the created PersonaInfo
+   * @throws Error if clip_id is invalid or persona creation fails
+   *
+   * @example
+   * ```typescript
+   * // First extract vox stem from a song
+   * const voxStem = await api.extractVoxStem('song-id-123', 0, 30);
+   *
+   * // Then create persona using the vox stem
+   * const persona = await api.createPersona(
+   *   'song-id-123',
+   *   'My Voice',
+   *   'My custom voice profile',
+   *   false,
+   *   voxStem.vox_audio_id,
+   *   0,
+   *   30,
+   *   'rock, alternative'
+   * );
+   * console.log(`Created persona: ${persona.id}`);
+   * ```
+   */
+  public async createPersona(
+    clip_id: string,
+    name: string,
+    description: string = '',
+    is_public: boolean = false,
+    vox_audio_id?: string,
+    vocal_start_s: number = 0,
+    vocal_end_s: number = 30,
+    user_input_styles: string = ''
+  ): Promise<PersonaInfo> {
+    validateRequiredString(clip_id, 'clip_id');
+    validateRequiredString(name, 'name');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/persona/create/`;
+    logger.info(`Creating persona from clip: ${clip_id}`);
+
+    const payload: Record<string, any> = {
+      root_clip_id: clip_id,
+      name,
+      description,
+      is_public,
+      persona_type: 'vox',
+      clips: [clip_id]
+    };
+
+    // If vox_audio_id is provided, include vox-specific fields
+    if (vox_audio_id) {
+      payload.vox_audio_id = vox_audio_id;
+      payload.vocal_start_s = vocal_start_s;
+      payload.vocal_end_s = vocal_end_s;
+    }
+
+    if (user_input_styles) {
+      payload.user_input_styles = user_input_styles;
+    }
+
+    const response = await this.client.post(url, payload, {
+      timeout: SunoApi.TIMEOUTS.API_PERSONA
+    });
+
+    if (response.status !== 200 && response.status !== 201) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    const p = response.data.persona || response.data;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      image_url: p.clip?.image_url || p.user_image_url,
+      root_clip_id: p.root_clip_id || clip_id,
+      vox_audio_id: p.vox_audio_id || vox_audio_id,
+      user_display_name: p.user_display_name,
+      user_handle: p.user_handle,
+      is_public: p.is_public,
+      is_owned: true,
+      clip_count: p.clip_count || 0,
+      upvote_count: p.upvote_count || 0
+    };
+  }
+
+  /**
+   * Extract vox (vocal) stem from a song for persona creation.
+   * This is required before creating a persona - it extracts the vocal track
+   * from the specified time range of a song.
+   *
+   * @param clip_id - ID of the song to extract vocals from
+   * @param vocal_start_s - Start time in seconds for vocal extraction
+   * @param vocal_end_s - End time in seconds for vocal extraction (max 30 seconds range)
+   * @returns Promise resolving to object with vox_audio_id
+   * @throws Error if clip_id is invalid or extraction fails
+   *
+   * @example
+   * ```typescript
+   * // Extract 30 seconds of vocals starting from second 45
+   * const result = await api.extractVoxStem('song-id-123', 45, 75);
+   * console.log(result.vox_audio_id); // Use this for createPersona
+   * ```
+   */
+  public async extractVoxStem(
+    clip_id: string,
+    vocal_start_s: number = 0,
+    vocal_end_s: number = 30
+  ): Promise<{ vox_audio_id: string; clip_id: string }> {
+    validateRequiredString(clip_id, 'clip_id');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/clip/${clip_id}/vox-stem`;
+    logger.info(`Extracting vox stem from clip: ${clip_id} (${vocal_start_s}s - ${vocal_end_s}s)`);
+
+    const payload = {
+      vocal_start_s,
+      vocal_end_s
+    };
+
+    const response = await this.client.post(url, payload, {
+      timeout: SunoApi.TIMEOUTS.API_PERSONA
+    });
+
+    if (response.status !== 200 && response.status !== 201) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    // The response contains processed_clip with the vox audio ID
+    const voxAudioId = response.data.processed_clip?.id || response.data.id;
+
+    if (!voxAudioId) {
+      throw new Error('Failed to extract vox stem: no vox_audio_id returned');
+    }
+
+    return {
+      vox_audio_id: voxAudioId,
+      clip_id
+    };
+  }
+
+  /**
+   * Delete (trash) a persona.
+   * The persona can be restored later using undo=true.
+   *
+   * @param personaId - ID of the persona to delete
+   * @param undo - If true, restores a previously trashed persona. Defaults to false
+   * @returns Promise resolving to success status
+   * @throws Error if personaId is invalid or deletion fails
+   *
+   * @example
+   * ```typescript
+   * // Delete a persona
+   * await api.deletePersona('persona-id-123');
+   *
+   * // Restore a deleted persona
+   * await api.deletePersona('persona-id-123', true);
+   * ```
+   */
+  public async deletePersona(personaId: string, undo: boolean = false): Promise<{ success: boolean }> {
+    validateRequiredString(personaId, 'personaId');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/persona/trash-persona/${personaId}/?undo=${undo}&hide=false`;
+    logger.info(`${undo ? 'Restoring' : 'Deleting'} persona: ${personaId}`);
+
+    const response = await this.client.put(url, {}, {
+      timeout: SunoApi.TIMEOUTS.API_PERSONA
+    });
+
+    if (response.status !== 200 && response.status !== 204) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Initiate WAV file conversion for a song (Pro feature).
+   * This starts the conversion process on Suno's servers.
+   *
+   * @param songId - ID of the song to convert to WAV
+   * @returns Promise resolving to conversion status
+   * @throws Error if songId is invalid or user doesn't have Pro subscription
+   *
+   * @example
+   * ```typescript
+   * await api.convertToWav('song-id-123');
+   * ```
+   */
+  public async convertToWav(songId: string): Promise<{ status: string }> {
+    validateRequiredString(songId, 'songId');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/gen/${songId}/convert_wav/`;
+    logger.info(`Initiating WAV conversion for: ${songId}`);
+
+    const response = await this.client.post(url, {}, {
+      timeout: SunoApi.TIMEOUTS.API_FEED
+    });
+
+    // 200 OK or 204 No Content are both valid success responses
+    if (response.status !== 200 && response.status !== 204) {
+      throw new Error(`Error response: ${response.statusText}`);
+    }
+
+    return response.data || { status: 'converting' };
+  }
+
+  /**
+   * Get the WAV file URL for a song (Pro feature).
+   * If the WAV is not ready yet, this will poll until it becomes available.
+   *
+   * @param songId - ID of the song to get WAV for
+   * @param waitForWav - If true, polls until WAV is ready. Defaults to true
+   * @returns Promise resolving to object with wav_url when ready
+   * @throws Error if songId is invalid, timeout occurs, or user doesn't have Pro subscription
+   *
+   * @example
+   * ```typescript
+   * // Get WAV URL (waits for conversion)
+   * const result = await api.getWavFile('song-id-123');
+   * console.log(result.wav_url); // https://cdn1.suno.ai/song-id-123.wav
+   *
+   * // Check without waiting
+   * const status = await api.getWavFile('song-id-123', false);
+   * ```
+   */
+  public async getWavFile(songId: string, waitForWav: boolean = true): Promise<{ wav_url?: string; status?: string }> {
+    validateRequiredString(songId, 'songId');
+    await this.keepAlive(false);
+
+    const url = `${SunoApi.BASE_URL}/api/gen/${songId}/wav_file/`;
+    logger.info(`Getting WAV file for: ${songId}`);
+
+    if (!waitForWav) {
+      const response = await this.client.get(url, {
+        timeout: SunoApi.TIMEOUTS.API_FEED
+      });
+      return response.data;
+    }
+
+    // Poll until WAV is ready (max 60 seconds)
+    const maxWaitTime = 60000;
+    const startTime = Date.now();
+    const pollInterval = 2000;
+
+    while (Date.now() - startTime < maxWaitTime) {
+      const response = await this.client.get(url, {
+        timeout: SunoApi.TIMEOUTS.API_FEED
+      });
+
+      // Check if WAV URL is available (API returns wav_file_url)
+      const wavUrl = response.data?.wav_file_url || response.data?.wav_url || response.data?.url;
+      if (wavUrl) {
+        logger.info({ wavUrl }, 'WAV file ready');
+        return {
+          wav_url: wavUrl,
+          status: 'complete'
+        };
+      }
+
+      // Wait before next poll
+      await sleep(pollInterval / 1000);
+    }
+
+    throw new Error('Timeout waiting for WAV file conversion');
+  }
+
+  /**
+   * Download WAV file for a song (Pro feature).
+   * This is a convenience method that initiates conversion and waits for the WAV URL.
+   *
+   * @param songId - ID of the song to download as WAV
+   * @returns Promise resolving to object with wav_url
+   * @throws Error if songId is invalid, timeout occurs, or user doesn't have Pro subscription
+   *
+   * @example
+   * ```typescript
+   * const result = await api.downloadWav('song-id-123');
+   * console.log(result.wav_url); // https://cdn1.suno.ai/song-id-123.wav
+   * ```
+   */
+  public async downloadWav(songId: string): Promise<{ wav_url: string }> {
+    validateRequiredString(songId, 'songId');
+
+    // Step 1: Initiate conversion
+    logger.info(`Starting WAV download process for: ${songId}`);
+    await this.convertToWav(songId);
+
+    // Step 2: Wait for WAV to be ready
+    const result = await this.getWavFile(songId, true);
+
+    if (!result.wav_url) {
+      throw new Error('Failed to get WAV URL');
+    }
+
+    return { wav_url: result.wav_url };
   }
 }
 

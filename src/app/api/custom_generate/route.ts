@@ -18,13 +18,17 @@ export async function POST(req: NextRequest) {
   if (req.method === 'POST') {
     try {
       const body = await req.json();
-      const { prompt, tags, title, make_instrumental, model, wait_audio, negative_tags } = body;
+      const { prompt, tags, title, make_instrumental, model, wait_audio, negative_tags, persona_id, artist_clip_id, root_clip_id } = body;
+      // Accept either artist_clip_id or root_clip_id (root_clip_id is returned by /api/personas)
+      const clipId = artist_clip_id || root_clip_id;
       const audioInfo = await (await sunoApi((await cookies()).toString())).custom_generate(
         prompt, tags, title,
         Boolean(make_instrumental),
         model || DEFAULT_MODEL,
         Boolean(wait_audio),
-        negative_tags
+        negative_tags,
+        persona_id,
+        clipId
       );
       return new NextResponse(JSON.stringify(audioInfo), {
         status: 200,

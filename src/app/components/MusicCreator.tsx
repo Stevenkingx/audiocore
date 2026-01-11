@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { Sparkles, Music, Loader2, Play, CheckCircle2, AlertCircle, Lock, Download } from 'lucide-react';
 
 interface LyricsResult {
   title: string;
@@ -17,20 +16,56 @@ interface AudioInfo {
   status: string;
 }
 
+// Icons as components for cleaner code
+const SparklesIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+  </svg>
+);
+
+const MusicIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z" />
+  </svg>
+);
+
+const LoaderIcon = ({ className = '' }: { className?: string }) => (
+  <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+  </svg>
+);
+
+const PlayIcon = () => (
+  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+    <path d="M8 5v14l11-7z" />
+  </svg>
+);
+
+const DownloadIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+  </svg>
+);
+
 export default function MusicCreator() {
   const [prompt, setPrompt] = useState('');
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null);
   const [music, setMusic] = useState<AudioInfo[] | null>(null);
   const [loading, setLoading] = useState<'lyrics' | 'music' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
+
   const step2Ref = useRef<HTMLDivElement>(null);
   const step3Ref = useRef<HTMLDivElement>(null);
 
   const getHeaders = () => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    // In some setups, we might want to expose the public key to the frontend 
-    // or handle it via a session. For now, we'll check if a public key is provided.
     const apiKey = process.env.NEXT_PUBLIC_API_KEY;
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey}`;
@@ -50,7 +85,7 @@ export default function MusicCreator() {
         headers: getHeaders(),
         body: JSON.stringify({ prompt }),
       });
-      
+
       if (!res.ok) {
         const errorText = await res.text();
         throw new Error(`Server Error (${res.status}): ${errorText.substring(0, 100)}`);
@@ -59,14 +94,13 @@ export default function MusicCreator() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setLyrics(data);
-      
-      // Auto-scroll to step 2 after a short delay
+
       setTimeout(() => {
         step2Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 500);
     } catch (err: any) {
       console.error('Lyrics error:', err);
-      setError(err.message || 'Failed to generate lyrics. Check your OpenAI Key.');
+      setError(err.message || 'Failed to generate lyrics.');
     } finally {
       setLoading(null);
     }
@@ -96,210 +130,232 @@ export default function MusicCreator() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setMusic(data);
-      
-      // Auto-scroll to results
+
       setTimeout(() => {
         step3Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 500);
     } catch (err: any) {
       console.error('Music error:', err);
-      setError(err.message || 'The Suno engine timed out. Try generating without waiting for audio.');
+      setError(err.message || 'Generation failed. Please try again.');
     } finally {
       setLoading(null);
     }
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-16 pb-32 px-4">
-      {/* Step 1: Input */}
-      <div className="p-8 rounded-[40px] bg-white/[0.03] border border-white/10 backdrop-blur-xl relative overflow-hidden shadow-2xl">
-        <div className="absolute top-0 right-0 p-6 opacity-10">
-          <span className="text-8xl font-black italic tracking-tighter text-white">01</span>
-        </div>
-        
-        <h2 className="text-3xl font-black text-white mb-8 flex items-center gap-3">
-          <div className="p-2 bg-indigo-500/20 rounded-lg">
-            <Sparkles className="text-indigo-400 w-6 h-6" />
+    <div className="w-full max-w-4xl mx-auto space-y-8 px-4">
+      {/* Step indicator */}
+      <div className="flex items-center justify-center gap-4 mb-12">
+        <div className="flex items-center gap-2">
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+            loading === 'lyrics' ? 'bg-emerald-500 text-white animate-pulse' :
+            lyrics ? 'bg-emerald-500 text-white' : 'glass text-white/50'
+          }`}>
+            {lyrics ? <CheckIcon /> : '1'}
           </div>
-          Create Your Concept
-        </h2>
-        
-        <div className="space-y-6">
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="What is your song about? (e.g. A futuristic love story in a neon-lit Tokyo)"
-            className="w-full h-40 bg-black/60 border border-white/10 rounded-[24px] p-6 text-xl text-white placeholder:text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all resize-none shadow-inner"
-          />
-          
-          <button
-            onClick={generateLyrics}
-            disabled={loading !== null || !prompt}
-            className="w-full py-5 bg-indigo-600 hover:bg-indigo-50 disabled:opacity-30 disabled:cursor-not-allowed text-white font-black text-lg rounded-2xl transition-all flex items-center justify-center gap-3 shadow-[0_10px_40px_-10px_rgba(79,70,229,0.5)] active:scale-[0.99]"
-          >
-            {loading === 'lyrics' ? (
-              <Loader2 className="animate-spin w-6 h-6" />
-            ) : (
-              <Sparkles className="w-6 h-6" />
-            )}
-            {loading === 'lyrics' ? 'AI IS WRITING...' : 'GENERATE LYRICS & STYLE'}
-          </button>
+          <span className={`text-sm ${lyrics ? 'text-white' : 'text-white/40'}`}>Concept</span>
+        </div>
+        <div className={`w-12 h-px ${lyrics ? 'bg-emerald-500' : 'bg-white/10'}`} />
+        <div className="flex items-center gap-2">
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+            loading === 'music' ? 'bg-emerald-500 text-white animate-pulse' :
+            music ? 'bg-emerald-500 text-white' : 'glass text-white/50'
+          }`}>
+            {music ? <CheckIcon /> : '2'}
+          </div>
+          <span className={`text-sm ${music ? 'text-white' : 'text-white/40'}`}>Generate</span>
+        </div>
+        <div className={`w-12 h-px ${music ? 'bg-emerald-500' : 'bg-white/10'}`} />
+        <div className="flex items-center gap-2">
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium glass ${music ? 'text-white' : 'text-white/50'}`}>
+            3
+          </div>
+          <span className={`text-sm ${music ? 'text-white' : 'text-white/40'}`}>Listen</span>
         </div>
       </div>
 
+      {/* Error display */}
       {error && (
-        <div className="p-6 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-4 animate-bounce">
-          <AlertCircle className="w-6 h-6 flex-shrink-0" />
-          <p className="font-bold">{error}</p>
+        <div className="glass-accent rounded-2xl p-4 border-red-500/20 bg-red-500/10">
+          <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}
 
-      {/* Step 2: Composition & Music Trigger */}
-      <div 
+      {/* Step 1: Input */}
+      <div className="glass rounded-3xl p-8 glow-sm">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <SparklesIcon />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-white">Describe your song</h2>
+            <p className="text-sm text-white/40">What should your music be about?</p>
+          </div>
+        </div>
+
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="A melancholic indie song about late night city walks and neon reflections on wet pavement..."
+          className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white placeholder:text-white/20 focus:outline-none focus:border-emerald-500/50 focus:bg-white/[0.07] transition-all resize-none text-base"
+        />
+
+        <button
+          onClick={generateLyrics}
+          disabled={loading !== null || !prompt}
+          className="mt-4 w-full py-4 rounded-2xl font-medium transition-all flex items-center justify-center gap-3 disabled:opacity-30 disabled:cursor-not-allowed bg-emerald-500 hover:bg-emerald-400 text-black"
+        >
+          {loading === 'lyrics' ? (
+            <>
+              <LoaderIcon className="w-5 h-5" />
+              <span>Generating lyrics...</span>
+            </>
+          ) : (
+            <>
+              <SparklesIcon />
+              <span>Generate Lyrics & Style</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Step 2: Review & Generate */}
+      <div
         ref={step2Ref}
-        className={`transition-all duration-700 border-2 rounded-[44px] p-1 ${!lyrics ? 'border-white/5 opacity-50' : 'border-indigo-500/50 shadow-[0_0_50px_-10px_rgba(79,70,229,0.3)]'}`}
+        className={`transition-all duration-500 ${!lyrics && !loading ? 'opacity-40 pointer-events-none' : ''}`}
       >
-        <div className="p-8 rounded-[40px] bg-white/[0.03] backdrop-blur-3xl">
-          <div className="flex items-center gap-3 mb-10">
-            <div className={`p-3 rounded-2xl ${lyrics ? 'bg-indigo-500' : 'bg-white/10'}`}>
-              {lyrics ? <CheckCircle2 className="w-5 h-5 text-white" /> : <Lock className="w-5 h-5 text-white/40" />}
+        <div className={`glass rounded-3xl p-8 ${lyrics ? 'border-glow' : ''}`}>
+          <div className="flex items-center gap-3 mb-6">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+              lyrics ? 'bg-emerald-500/20 border border-emerald-500/30 text-emerald-400' : 'bg-white/5 border border-white/10 text-white/30'
+            }`}>
+              <MusicIcon />
             </div>
             <div>
-              <h2 className="text-3xl font-black text-white leading-none">Music Production</h2>
-              <p className="text-gray-500 text-sm mt-2 uppercase tracking-widest font-bold">Step 02: Studio Processing</p>
+              <h2 className="text-xl font-semibold text-white">Review & Create</h2>
+              <p className="text-sm text-white/40">AI-generated composition ready for production</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-10">
-            <div className="lg:col-span-3 space-y-6">
-              <div className="p-8 rounded-3xl bg-black/40 border border-white/10 min-h-[300px] relative overflow-hidden">
-                {!lyrics && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 gap-2">
-                    <Loader2 className={`w-8 h-8 ${loading === 'lyrics' ? 'animate-spin text-indigo-500' : 'opacity-20'}`} />
-                    <p className="font-bold text-sm tracking-tighter uppercase">{loading === 'lyrics' ? 'IA is writing...' : 'Waiting for composition'}</p>
-                  </div>
-                )}
-                
-                {lyrics && (
-                  <div className="animate-in fade-in slide-in-from-top-4 duration-500">
-                    <h4 className="text-2xl font-black text-white mb-2 underline decoration-indigo-500 decoration-4 underline-offset-8">{lyrics.title}</h4>
-                    <div className="flex flex-wrap gap-2 mb-6 mt-4">
-                      {String(lyrics.style || '').split(' ').filter(t => t.trim()).map((tag, i) => (
-                        <span key={i} className="text-[10px] font-black uppercase tracking-widest text-indigo-300 bg-indigo-500/20 px-3 py-1 rounded-full border border-indigo-500/30">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="max-h-[350px] overflow-y-auto pr-4 custom-scrollbar text-gray-300 text-lg whitespace-pre-wrap leading-relaxed italic font-serif">
-                      {typeof lyrics.lyrics === 'string' ? lyrics.lyrics : JSON.stringify(lyrics.lyrics, null, 2)}
-                    </div>
-                  </div>
-                )}
-              </div>
+          {!lyrics && !loading && (
+            <div className="h-48 flex items-center justify-center text-white/20 text-sm">
+              Waiting for lyrics...
             </div>
+          )}
 
-            <div className="lg:col-span-2 flex flex-col justify-center space-y-8">
-              <div className="text-center lg:text-left space-y-4">
-                <h3 className="text-4xl font-black text-white tracking-tighter">Ready to Hear It?</h3>
-                <p className="text-gray-400 text-lg leading-snug">The Suno Engine will transform this text into two unique studio variations.</p>
+          {loading === 'lyrics' && (
+            <div className="h-48 flex flex-col items-center justify-center gap-3">
+              <LoaderIcon className="w-8 h-8 text-emerald-500" />
+              <span className="text-white/40 text-sm">AI is composing...</span>
+            </div>
+          )}
+
+          {lyrics && (
+            <div className="space-y-6">
+              {/* Title and tags */}
+              <div className="space-y-3">
+                <h3 className="text-2xl font-bold text-white">{lyrics.title}</h3>
+                <div className="flex flex-wrap gap-2">
+                  {String(lyrics.style || '').split(',').filter(t => t.trim()).map((tag, i) => (
+                    <span key={i} className="text-xs px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                      {tag.trim()}
+                    </span>
+                  ))}
+                </div>
               </div>
-              
+
+              {/* Lyrics */}
+              <div className="bg-white/5 rounded-2xl p-5 max-h-64 overflow-y-auto custom-scrollbar">
+                <pre className="text-white/70 text-sm whitespace-pre-wrap font-sans leading-relaxed">
+                  {typeof lyrics.lyrics === 'string' ? lyrics.lyrics : JSON.stringify(lyrics.lyrics, null, 2)}
+                </pre>
+              </div>
+
+              {/* Generate button */}
               <button
                 onClick={generateMusic}
-                disabled={!lyrics || loading !== null}
-                className={`group relative w-full py-8 text-2xl font-black rounded-3xl transition-all transform active:scale-95 flex items-center justify-center gap-4 overflow-hidden ${
-                  lyrics 
-                    ? 'bg-white text-black shadow-[0_20px_50px_-10px_rgba(255,255,255,0.3)] hover:bg-indigo-50' 
-                    : 'bg-white/5 text-white/10 cursor-not-allowed border border-white/5'
-                }`}
+                disabled={loading !== null}
+                className="w-full py-4 rounded-2xl font-medium transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed bg-white hover:bg-white/90 text-black glow-sm"
               >
                 {loading === 'music' ? (
-                  <Loader2 className="animate-spin w-8 h-8" />
+                  <>
+                    <LoaderIcon className="w-5 h-5" />
+                    <span>Producing audio...</span>
+                  </>
                 ) : (
-                  <Play className={`w-8 h-8 ${lyrics ? 'fill-black' : 'fill-white/10'}`} />
-                )}
-                <span className="relative z-10">
-                  {loading === 'music' ? 'PRODUCING...' : 'CREATE MUSIC NOW'}
-                </span>
-                
-                {lyrics && (
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:animate-shimmer" />
+                  <>
+                    <PlayIcon />
+                    <span>Create Music</span>
+                  </>
                 )}
               </button>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/5 text-center">
-                  <p className="text-[10px] font-black text-gray-500 uppercase">Cost</p>
-                  <p className="text-lg font-black text-white">10 Credits</p>
-                </div>
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/5 text-center">
-                  <p className="text-[10px] font-black text-gray-500 uppercase">Engine</p>
-                  <p className="text-lg font-black text-indigo-400 italic">v5.0</p>
-                </div>
-              </div>
+
+              <p className="text-center text-xs text-white/30">
+                Generation takes ~30 seconds and uses 10 credits
+              </p>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Step 3: Production Results */}
-      <div 
+      {/* Step 3: Results */}
+      <div
         ref={step3Ref}
-        className={`transition-all duration-1000 ${!music ? 'opacity-0 scale-95' : 'opacity-100 scale-100'}`}
+        className={`transition-all duration-500 ${!music ? 'opacity-0 scale-95 pointer-events-none' : 'opacity-100 scale-100'}`}
       >
-        <div className="p-10 rounded-[40px] bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-8 opacity-10">
-            <span className="text-9xl font-black italic tracking-tighter text-white">03</span>
+        <div className="glass rounded-3xl p-8 border-glow">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <PlayIcon />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-white">Your Music</h2>
+              <p className="text-sm text-white/40">Two unique variations generated</p>
+            </div>
           </div>
 
-          <h3 className="text-2xl font-black text-white mb-10 flex items-center gap-3">
-            <div className="p-2 bg-emerald-500/20 rounded-lg">
-              <Play className="text-emerald-400 w-6 h-6 fill-emerald-400" />
-            </div>
-            Studio Masters
-          </h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
-            {music?.map((track) => (
-              <div key={track.id} className="p-6 rounded-3xl bg-black/60 border border-white/5 space-y-6 hover:border-emerald-500/40 transition-all group overflow-hidden flex flex-col md:flex-row gap-6 items-center md:items-start">
-                {/* Track Image */}
-                <div className="w-32 h-32 flex-shrink-0 relative overflow-hidden rounded-2xl bg-white/5 border border-white/10">
+          <div className="space-y-4">
+            {music?.map((track, index) => (
+              <div key={track.id} className="glass rounded-2xl p-5 flex gap-5 items-center">
+                {/* Album art */}
+                <div className="w-20 h-20 rounded-xl overflow-hidden bg-white/5 flex-shrink-0">
                   {track.image_url ? (
-                    <img src={track.image_url} alt={track.title} className="w-full h-full object-cover transition-transform group-hover:scale-110" />
+                    <img src={track.image_url} alt={track.title} className="w-full h-full object-cover" />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <Music className="text-white/10 w-8 h-8" />
+                    <div className="w-full h-full flex items-center justify-center text-white/10">
+                      <MusicIcon />
                     </div>
                   )}
                 </div>
 
-                <div className="flex-1 w-full space-y-4">
-                  <div className="flex justify-between items-start">
-                    <div className="space-y-1">
-                      <span className="text-white font-black text-xl block truncate max-w-[200px]">{track.title || 'Variation'}</span>
-                      <span className="text-emerald-500 text-[10px] font-black font-mono uppercase tracking-widest bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20 inline-block">Mastered</span>
+                {/* Track info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                      <h4 className="font-medium text-white truncate">{track.title || `Variation ${index + 1}`}</h4>
+                      <span className="text-xs text-emerald-400">Ready</span>
                     </div>
                     {track.audio_url && (
-                      <a 
-                        href={track.audio_url} 
+                      <a
+                        href={track.audio_url}
                         download={`${track.title || 'audio'}.mp3`}
                         target="_blank"
-                        className="p-3 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-all"
-                        title="Download MP3"
+                        className="p-2 rounded-lg glass hover:bg-white/10 transition-all text-white/60 hover:text-white"
+                        title="Download"
                       >
-                        <Download className="w-5 h-5" />
+                        <DownloadIcon />
                       </a>
                     )}
                   </div>
 
                   {track.audio_url ? (
-                    <audio controls className="w-full h-12 filter brightness-125 contrast-125">
+                    <audio controls className="w-full h-10" style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.9)' }}>
                       <source src={track.audio_url} type="audio/mpeg" />
                     </audio>
                   ) : (
-                    <div className="h-12 flex items-center justify-center text-sm text-gray-500 font-bold bg-white/5 rounded-2xl border border-dashed border-white/10">
-                      <Loader2 className="animate-spin w-4 h-4 mr-3" />
-                      Synchronizing Audio...
+                    <div className="h-10 flex items-center text-sm text-white/30">
+                      <LoaderIcon className="w-4 h-4 mr-2" />
+                      Processing...
                     </div>
                   )}
                 </div>
